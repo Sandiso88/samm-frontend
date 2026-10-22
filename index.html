@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>⚙️ SAMM Core AI Platform</title>
+    <script src="https://unpkg.com" crossorigin></script>
+    <script src="https://unpkg.com" crossorigin></script>
+    <script src="https://unpkg.com"></script>
+    <script src="https://tailwindcss.com"></script>
+  </head>
+  <body style="margin: 0; padding: 0; background-color: #191919;">
+    <div id="root"></div>
+
+    <script type="text/babel">
+      const { useState, useEffect, useRef } = React;
+
+      function SammConsole() {
+        const [messages, setMessages] = useState([
+          {
+            id: "init",
+            role: "assistant",
+            content: "Welcome to SAMM Core Engine Console. I am connected to your ShiftLeft Medallion lakehouse. Ask a natural language question to automatically compile secure SQL, or use the pipeline controls to ingest datasets.",
+            timestamp: "System Ready"
+          }
+        ]);
+        const [input, setInput] = useState("");
+        const [activeTab, setActiveTab] = useState("chat");
+        const [isLoading, setIsLoading] = useState(false);
+        const [systemRole, setSystemRole] = useState("admin");
+        
+        const [schemaCatalog] = useState({
+          database: "glue_db_cvvdr97yl50zyt",
+          table: "gold_accounts_profile_matrix",
+          status: "Active Pipeline Validated",
+          columns: [
+            { name: "tenant_id", type: "varchar" },
+            { name: "account_matrix_id", type: "bigint" },
+            { name: "profile_score", type: "double" },
+            { name: "activity_velocity", type: "double" },
+            { name: "last_updated_timestamp", type: "timestamp" }
+          ]
+        });
+
+        const [s3Path, setS3Path] = useState("s3://shiftleft-landing-bucket/raw_updates.json");
+        const [contextPayload, setContextPayload] = useState('{"environment": "production", "batch_priority": "high"}');
+
+        const messagesEndRef = useRef(null);
+        useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, isLoading]);
+
+        const handleSendMessage = (e) => {
+          e.preventDefault();
+          if (!input.trim() || isLoading) return;
+
+          setMessages((prev) => [...prev, { id: Date.now().toString(), role: "user", content: input, timestamp: new Date().toLocaleTimeString() }]);
+          setInput("");
+          setIsLoading(true);
+
+          setTimeout(() => {
+            let mockReply = "";
+            if (input.toLowerCase().includes("score") || input.toLowerCase().includes("velocity")) {
+              mockReply = `### Compiled SQL\nSELECT tenant_id, account_matrix_id, profile_score \nFROM glue_db_cvvdr97yl50zyt.gold_accounts_profile_matrix \nWHERE profile_score > 0.75 \nORDER BY activity_velocity DESC \nLIMIT 10;\n\n### Analytical Summary\nThe secure semantic layer successfully executed your query across the Gold Matrix catalog. Profile metrics are experiencing an upward velocity surge among high-value enterprise accounts.`;
+            } else {
+              mockReply = `### Compiled SQL\nSELECT * \nFROM glue_db_cvvdr97yl50zyt.gold_accounts_profile_matrix \nLIMIT 5;\n\n### Analytical Summary\nDefault fallback visualization completed under safety row caps. All localized regex rules verified. No suspicious vector matches discovered.`;
+            }
+            setMessages((prev) => [...prev, { id: (Date.now() + 1).toString(), role: "assistant", content: mockReply, timestamp: new Date().toLocaleTimeString() }]);
+            setIsLoading(false);
+          }, 1200);
+        };
+
+        const handlePipelineTrigger = () => {
+          setIsLoading(true);
+          setTimeout(() => {
+            setMessages((prev) => [...prev, { id: Date.now().toString(), role: "assistant", content: `### Pipeline Ingestion Fired Successfully\nTarget Handler: shiftleft-superposition-pipeline-orchestrator\nStatus: 200 OK\nBody: Ingestion job dispatched out-of-band for data asset \`${s3Path}\`. Schema mapping update routines have been invoked.`, timestamp: new Date().toLocaleTimeString() }]);
+            setActiveTab("chat");
+            setIsLoading(false);
+          }, 1500);
+        };
+
+        return (
+          <div className="flex h-screen bg-[#191919] text-[#E3E3E3] font-sans overflow-hidden w-screen">
+            <div className="w-64 bg-[#202020] border-r border-[#2D2D2D] flex flex-col justify-between">
+              <div>
+                <div className="p-5 flex items-center space-x-3 border-b border-[#2D2D2D]">
+                  <div className="bg-amber-600 p-2 rounded-lg text-white font-bold">SAMM</div>
+                  <div>
+                    <h1 className="font-bold text-lg text-white tracking-wide">SAMM AI</h1>
+                    <p className="text-xs text-amber-500 font-mono">Serverless Core v2.4</p>
+                  </div>
+                </div>
+                <nav className="p-4 space-y-2">
+                  <button onClick={() => setActiveTab("chat")} className={`w-full text-left flex items-center space-x-3 px-4 py-3 rounded-lg text-sm font-medium transition ${activeTab === "chat" ? "bg-[#2D2D2D] text-white border-l-4 border-amber-500" : "text-[#A0A0A0] hover:bg-[#252525] hover:text-white"}`}><span>Cognitive Chat</span></button>
+                  <button onClick={() => setActiveTab("onboarding")} className={`w-full text-left flex items-center space-x-3 px-4 py-3 rounded-lg text-sm font-medium transition ${activeTab === "onboarding" ? "bg-[#2D2D2D] text-white border-l-4 border-amber-500" : "text-[#A0A0A0] hover:bg-[#252525] hover:text-white"}`}><span>Data Onboarding</span></button>
+                </nav>
+              </div>
+              <div className="p-4 border-t border-[#2D2D2D] bg-[#1E1E1E]">
+                <div className="text-xs text-[#A0A0A0] mb-2"><span>🛡️ RBAC Identity Firewall</span></div>
+                <select value={systemRole} onChange={(e) => setSystemRole(e.target.value)} className="w-full bg-[#2D2D2D] border border-[#3D3D3D] rounded-md py-1.5 px-3 text-xs text-white focus:outline-none focus:border-amber-500 font-mono cursor-pointer">
+                  <option value="viewer">Viewer (Cap: 100 Rows)</option>
+                  <option value="analyst">Analyst (BI View Controls)</option>
+                  <option value="engineer">Engineer (Ingestion Access)</option>
+                  <option value="admin">Administrator (Full Bypass)</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="flex-1 flex flex-col min-w-0 bg-[#191919]">
+              <header className="h-16 border-b border-[#2D2D2D] px-6 flex items-center justify-between bg-[#1A1A1A]">
+                <span className="text-xs uppercase bg-[#2D2D2D] text-amber-500 font-mono px-2.5 py-1 rounded border border-[#3D3D3D]">Active Console Context</span>
+                <div className="flex items-center space-x-4 text-xs font-mono text-[#A0A0A0]">
+                  <span>👤 Context: {systemRole.toUpperCase()}</span>
+                  <span>💾 Workgroup: shiftleft-superposition</span>
+                </div>
+              </header>
+              <div className="flex-1 overflow-y-auto p-6 space-y-4">
+                {activeTab === "chat" && (
+                  <div className="max-w-4xl mx-auto space-y-6">
+                    {messages.map((msg) => (
+                      <div key={msg.id} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+                        <div className={`max-w-[85%] rounded-xl p-5 shadow-lg ${msg.role === "user" ? "bg-amber-600 text-white" : "bg-[#222222] border border-[#2D2D2D] text-[#E3E3E3]"}`}>
+                          <div className="text-xs font-mono text-[#A0A0A0] mb-2 flex justify-between items-center"><span className="font-bold text-amber-500">{msg.role === "user" ? "USER TRANSACTION" : "SAMM AI ENGINE"}</span><span>{msg.timestamp}</span></div>
+                          <div className="text-sm leading-relaxed whitespace-pre-wrap font-sans">{msg.content}</div>
+                        </div>
+                      </div>
+                    ))}
+                    {isLoading && <div className="flex justify-start"><div className="bg-[#222222] border border-[#2D2D2D] rounded-xl p-4 flex items-center space-x-3"><span className="text-xs font-mono text-[#A0A0A0] animate-pulse">Running out-of-band Bedrock pipeline...</span></div></div>}
+                    <div ref={messagesEndRef} />
+                  </div>
+                )}
+                {activeTab === "onboarding" && (
+                  <div className="max-w-2xl mx-auto bg-[#222222] border border-[#2D2D2D] rounded-xl p-6 shadow-xl space-y-6">
+                    <div className="border-b border-[#2D2D2D] pb-4">
+                      <h2 className="text-lg font-bold text-white">🗂️ Pipeline Orchestration Hub</h2>
+                    </div>
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-xs font-mono uppercase text-[#A0A0A0] mb-2">S3 Landing Source File Path</label>
+                        <input type="text" value={s3Path} onChange={(e) => setS3Path(e.target.value)} className="w-full bg-[#1A1A1A] border border-[#3D3D3D] rounded-lg p-3 text-sm text-white font-mono focus:outline-none focus:border-amber-500"/>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-mono uppercase text-[#A0A0A0] mb-2">Metadata Context JSON Payload</label>
