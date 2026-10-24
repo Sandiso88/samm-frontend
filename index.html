@@ -174,17 +174,36 @@
         };
 
         // ---- Chat ----------------------------------------------------------
-        const handleSendMessage = (e) => {
+               const handleSendMessage = async (e) => {
           e.preventDefault();
           const userText = input.trim();
           if (!userText || isLoading) return;
           addMessage("user", userText);
           setInput("");
-          run(async () => {
-            if (DEMO_MODE) { await sleep(800); addMessage("assistant", demoReply(userText)); return; }
-            const d = await callApi({ action: "query", prompt: userText, persona: activePersona });
-            addMessage("assistant", `### Compiled SQL\n${d.compiled_sql || ""}\n\n### Analytical Summary\n${d.summary || "No summary available."}`, d.rows);
-          });
+          setIsLoading(true);
+          try {
+            if (DEMO_MODE) {
+              await sleep(1000);
+              addMessage("assistant", demoReply(userText));
+            } else {
+              const res = await fetch(API_URL, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ prompt: userText, role: systemRole, persona: activePersona }),
+              });
+              let d = await res.json();
+              if (!res.ok || d.error) throw new Error(d.error || `Request failed (${res.status})`);
+              addMessage(
+                "assistant",
+                `### Compiled SQL\n${d.executed_sql || ""}\n\n### Analytical Summary\n${d.report_markdown || ""}`,
+                d.raw_data_grid
+              );
+            }
+          } catch (err) {
+            addMessage("assistant", `⚠️ ${err.message}`);
+          } finally {
+            setIsLoading(false);
+          }
         };
 
         const handleReplicate = (e) => {
