@@ -3,60 +3,74 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>⚙️ SAMM Core AI Platform</title>
-    <!-- React core (pinned, production builds) -->
-    <script src="https://unpkg.com" crossorigin></script>
-    <script src="https://unpkg.com" crossorigin></script>
-    <!-- Standalone in-browser Babel compiler -->
-    <script src="https://unpkg.com"></script>
-    <!-- Tailwind CSS framework (pinned) -->
-    <script src="https://tailwindcss.com"></script>
+    <title>SAMM Core AI Platform</title>
+    <!-- React 18 UMD (pinned), in-browser Babel (pinned), Tailwind CDN (pinned) -->
+    <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com/3.4.17"></script>
   </head>
-  <body style="margin: 0; padding: 0; background-color: #191919; color: #E3E3E3; font-family: sans-serif;">
+  <body style="margin:0;background:#191919;color:#E3E3E3;font-family:system-ui,sans-serif;">
     <div id="root"></div>
 
     <script type="text/babel">
       const { useState, useEffect, useRef } = React;
 
       // ------------------------------------------------------------------
-      // CONFIG CONFIGURATION INTERFACES
+      // CONFIG: set API_URL to your API Gateway / Function URL to go live.
       // ------------------------------------------------------------------
       const API_URL = "";
       const DEMO_MODE = !API_URL;
+      const DEMO_TENANT = "Client_Alpha_London";
 
       const ROLES = [
-        { value: "viewer", label: "Viewer (Cap: 100 Rows)" },
-        { value: "analyst", label: "Analyst (BI View Controls)" },
-        { value: "engineer", label: "Engineer (Ingestion Access)" },
-        { value: "admin", label: "Administrator (Full Access)" },
+        { value: "viewer", label: "Viewer (queries only)" },
+        { value: "analyst", label: "Analyst (BI replication)" },
+        { value: "engineer", label: "Engineer (ingestion + views)" },
+        { value: "admin", label: "Administrator (full access)" },
       ];
-
       const PERSONAS = [
         { value: "architect", label: "BI Report Architect" },
         { value: "guard", label: "Metadata Ingestion Guard" },
-        { value: "finops", label: "FinOps Budget Analyst" }
+        { value: "finops", label: "FinOps Budget Analyst" },
       ];
+      const PLATFORMS = ["Power BI", "Sisense", "Tableau", "Looker", "QuickSight"];
+
+      const VIEW_NAME_RE = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
+      const EMAIL_RE = /^[^@\s]{1,64}@[^@\s]{1,255}$/;
+      const TENANT_RE = /^[A-Za-z0-9_\-]{1,64}$/;
+      const MAX_IMAGE_BYTES = 3.5 * 1024 * 1024; // keeps base64 under the backend's 5M-char limit
 
       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
       const demoReply = (text) => {
         const t = text.toLowerCase();
-        
         if (t.includes("power bi") || t.includes("dax") || t.includes("replicate") || t.includes("image") || t.includes("report")) {
-          return "### Multimodal Layout Analyser (Vision Active)\nLegacy chart framework matched successfully against active catalog fields.\n\n### 📊 Power BI DAX Expression Matrix Model\n```dax\nGoldAccountsProfileMatrix = \nSUMMARIZECOLUMNS(\n    'gold_accounts_profile_matrix'[client_name],\n    \"ResolutionRate\", AVERAGE('gold_accounts_profile_matrix'[resolution_rate_percentage]),\n    \"TotalComputeCost\", SUM('gold_accounts_profile_matrix'[total_compute_cost_index])\n)\n```\n\n### 📊 Sisense ElastiCube JSON Schema Structure\n```json\n{\n  \"elasticube\": {\n    \"name\": \"SAMM_Gold_Layer_Cube\",\n    \"tables\": [{\n      \"name\": \"gold_accounts_profile_matrix\",\n      \"expression\": \"SELECT * FROM tenant_scoped\"\n    }]\n  }\n}\n```\n\nCross-BI reports have been fully compiled out-of-band based on client data models.";
+          return "### Multimodal Layout Analyser (simulated)\nLegacy chart framework matched against catalog fields.\n\n### Power BI DAX Expression Matrix Model (simulated)\n```dax\nGoldAccountsProfileMatrix = \nSUMMARIZECOLUMNS(\n    'gold_accounts_profile_matrix'[client_name],\n    \"ResolutionRate\", AVERAGE('gold_accounts_profile_matrix'[resolution_rate_percentage]),\n    \"TotalComputeCost\", SUM('gold_accounts_profile_matrix'[total_compute_cost_index])\n)\n```\n\n### Sisense ElastiCube JSON Schema (simulated)\n```json\n{\n  \"elasticube\": {\n    \"name\": \"SAMM_Gold_Layer_Cube\",\n    \"tables\": [{\n      \"name\": \"gold_accounts_profile_matrix\",\n      \"expression\": \"SELECT * FROM gold_accounts_profile_matrix WHERE tenant_id = '" + DEMO_TENANT + "'\"\n    }]\n  }\n}\n```";
         }
-        
-        if (t.includes("create view") || t.includes("materialize")) {
-          return "### ⚙️ View Materialization Success\nDatabase view `custom_client_matrix_view` compiled and deployed live to `glue_db_cvvdr97yl50zyt` out-of-band under strict multi-tenant firewall parameters.";
-        }
-        
-        return "### Compiled SQL (simulated)\nSELECT account_matrix_id FROM tenant_scoped LIMIT 5\n\n### Analytical Summary (simulated)\nThis request was processed safely within your organizational compliance region boundaries.";
+        return "### Compiled SQL (simulated)\nSELECT account_matrix_id FROM tenant_scoped LIMIT 5\n\n### Analytical Summary (simulated)\nThis is a demo response. Set API_URL to query the live gold layer.";
       };
+
+      // Minimal markdown: ### headings and ``` code fences. Renders as React text (no innerHTML).
+      function Rich({ text }) {
+        return (text || "").split("```").map((part, i) => (
+          <React.Fragment key={i}>
+            {i % 2 ? (
+              <pre className="mt-2 p-3 bg-[#111] border border-[#2D2D2D] rounded text-xs overflow-x-auto">{part.slice(part.indexOf("\n") + 1)}</pre>
+            ) : (
+              part.split("\n").map((ln, j) =>
+                ln.startsWith("### ")
+                  ? <h4 key={j} className="font-semibold text-amber-500 mt-2">{ln.slice(4)}</h4>
+                  : ln ? <p key={j} className="whitespace-pre-wrap">{ln.replace(/\*\*/g, "")}</p> : null
+              )
+            )}
+          </React.Fragment>
+        ));
+      }
 
       function ResultTable({ rows }) {
         if (!rows || rows.length === 0) return null;
         const cols = Object.keys(rows[0] || {});
-        const shown = rows.slice(0, 10);
         return (
           <div className="mt-4 overflow-x-auto">
             <table className="text-xs font-mono border border-[#2D2D2D] w-full">
@@ -66,130 +80,329 @@
                 </tr>
               </thead>
               <tbody>
-                {shown.map((r, i) => (
+                {rows.slice(0, 10).map((r, i) => (
                   <tr key={i} className="border-t border-[#2D2D2D]">
                     {cols.map((c) => <td key={c} className="px-3 py-1.5 whitespace-nowrap">{String(r[c] ?? "")}</td>)}
                   </tr>
                 ))}
               </tbody>
             </table>
+            <div className="text-xs text-gray-500 mt-1">Showing {Math.min(10, rows.length)} of {rows.length} rows</div>
           </div>
         );
       }
 
+      const field = "w-full bg-[#111] border border-[#2D2D2D] rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-amber-500";
+      const btn = "px-4 py-2 rounded bg-amber-600 hover:bg-amber-500 text-black text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-amber-300";
+
       function SammConsole() {
         const nextId = useRef(0);
-        const stamp = () => new Date().toLocaleTimeString();
-        const makeMsg = (role, content, rows) => ({ id: `m${++nextId.current}`, role, content, rows, timestamp: stamp() });
+        const makeMsg = (role, content, rows) => ({ id: `m${++nextId.current}`, role, content, rows, timestamp: new Date().toLocaleTimeString() });
 
-        const [messages, setMessages] = useState([
-          {
-            id: "init",
-            role: "assistant",
-            content: "SAMM AI System Core Active. Mode: Integrated Command Control Dashboard. Select authorization role profiling below.",
-            timestamp: "System Ready",
-          },
-        ]);
+        const [messages, setMessages] = useState([{
+          id: "init", role: "assistant", timestamp: "System ready",
+          content: DEMO_MODE
+            ? "SAMM AI System Core active in demo mode. Responses are simulated. Pick a role profile to preview each workspace."
+            : "SAMM AI System Core connected. Paste your access token in the sidebar, then ask a question.",
+        }]);
         const [input, setInput] = useState("");
         const [activeTab, setActiveTab] = useState("chat");
         const [isLoading, setIsLoading] = useState(false);
         const [systemRole, setSystemRole] = useState("viewer");
         const [activePersona, setActivePersona] = useState("architect");
+        const [token, setToken] = useState("");
+        const [platform, setPlatform] = useState("Power BI");
 
         const [s3Path, setS3Path] = useState("s3://shiftleft-superposition-ingest-vault/CS.json");
         const [contextPayload, setContextPayload] = useState('{"environment": "production", "batch_priority": "high"}');
         const [formError, setFormError] = useState("");
+        const [isDragging, setIsDragging] = useState(false);
+        const [uploadStatus, setUploadStatus] = useState("");
 
-        // Premium Multi-Role Functional Architecture States
-        const [isDragging, setIsDragging] = useState(false);             
-        const [uploadStatus, setUploadStatus] = useState("");           
+        const [viewName, setViewName] = useState("high_efficiency_accounts");
+        const [viewQuery, setViewQuery] = useState(
+          `SELECT client_name, resolution_rate_percentage FROM gold_accounts_profile_matrix WHERE tenant_id = '${DEMO_TENANT}' AND resolution_rate_percentage > 85`
+        );
+
         const [adminUsers, setAdminUsers] = useState([
-          { email: "engineer@shiftleft.com", role: "engineer", tenant: "Client_Alpha_London" },
-          { email: "analyst@shiftleft.com", role: "analyst", tenant: "Client_Beta_EU" }
+          { email: "engineer@shiftleft.com", role: "engineer", tenant: DEMO_TENANT },
+          { email: "analyst@shiftleft.com", role: "analyst", tenant: "Client_Beta_EU" },
         ]);
         const [newEmail, setNewEmail] = useState("");
         const [newRole, setNewRole] = useState("analyst");
-        const [viewQueryInput, setViewQueryInput] = useState("SELECT * FROM tenant_scoped WHERE resolution_rate_percentage > 85");
-        const [viewNameInput, setViewNameInput] = useState("high_efficiency_accounts");
+        const [newTenant, setNewTenant] = useState(DEMO_TENANT);
 
         const messagesEndRef = useRef(null);
         useEffect(() => {
           if (messagesEndRef.current) messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
         }, [messages, isLoading]);
 
-        // Security Responsibility Enforcement Mappings
+        const addMessage = (role, content, rows) => setMessages((prev) => [...prev, makeMsg(role, content, rows)]);
+
+        // UI gating only. In live mode the server enforces roles from the authenticated token.
         const isEngineer = ["engineer", "admin"].includes(systemRole);
+        const isAnalyst = ["analyst", "engineer", "admin"].includes(systemRole);
         const isAdmin = systemRole === "admin";
+        const canOnboard = isEngineer;
 
         useEffect(() => {
-          if (!isEngineer && activeTab === "onboarding") setActiveTab("chat");
-          if (!isAdmin && activeTab === "governance") setActiveTab("chat");
-        }, [systemRole]);
+          const locked = (!isEngineer && activeTab === "onboarding") || (!isAdmin && activeTab === "governance");
+          if (locked) {
+            setActiveTab("chat");
+            addMessage("assistant", "⚠️ **Access policy:** your active profile can't open that workspace. Switch to a role with access, or ask an administrator.");
+          }
+        }, [systemRole, activeTab]);
 
-        const handleSendMessage = async (e) => {
+        // ---- API + helpers -------------------------------------------------
+        const callApi = async (payload) => {
+          const res = await fetch(API_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...(token ? { Authorization: token } : {}) },
+            body: JSON.stringify(payload),
+          });
+          let d = {};
+          try { d = await res.json(); } catch (_) {}
+          if (!res.ok || d.error) throw new Error(d.error || `Request failed (${res.status})`);
+          return d;
+        };
+
+        const run = async (fn) => {
+          setIsLoading(true);
+          try { await fn(); }
+          catch (err) { addMessage("assistant", `⚠️ ${err.message}`); }
+          finally { setIsLoading(false); }
+        };
+
+        // ---- Chat ----------------------------------------------------------
+        const handleSendMessage = (e) => {
           e.preventDefault();
           const userText = input.trim();
           if (!userText || isLoading) return;
           addMessage("user", userText);
           setInput("");
-          setIsLoading(true);
-          try {
-            if (DEMO_MODE) {
-              await sleep(1000);
-              addMessage("assistant", demoReply(userText));
-            } else {
-              const res = await fetch(API_URL, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ prompt: userText, role: systemRole, persona: activePersona }),
-              });
-              let d = await res.json();
-              if (!res.ok || d.error) throw new Error(d.error || `Request failed (${res.status})`);
-              addMessage(
-                "assistant",
-                `### Compiled SQL\n${d.executed_sql || ""}\n\n### Analytical Summary\n${d.report_markdown || ""}`,
-                d.raw_data_grid
-              );
-            }
-          } catch (err) {
-            addMessage("assistant", `⚠️ ${err.message}`);
-          } finally {
-            setIsLoading(false);
-          }
+          run(async () => {
+            if (DEMO_MODE) { await sleep(800); addMessage("assistant", demoReply(userText)); return; }
+            const d = await callApi({ action: "query", prompt: userText, persona: activePersona });
+            addMessage("assistant", `### Compiled SQL\n${d.compiled_sql || ""}\n\n### Analytical Summary\n${d.summary || "No summary available."}`, d.rows);
+          });
         };
 
-        const addMessage = (role, content, rows) => setMessages((prev) => [...prev, makeMsg(role, content, rows)]);
+        const handleReplicate = (e) => {
+          const file = e.target.files && e.target.files[0];
+          e.target.value = "";
+          if (!file) return;
+          if (!["image/png", "image/jpeg"].includes(file.type)) { addMessage("assistant", "⚠️ Choose a PNG or JPEG screenshot."); return; }
+          if (file.size > MAX_IMAGE_BYTES) { addMessage("assistant", "⚠️ That image is over 3.5 MB. Export a smaller screenshot."); return; }
+          addMessage("user", `Replicate this dashboard (${file.name}) for ${platform}.`);
+          run(async () => {
+            if (DEMO_MODE) { await sleep(800); addMessage("assistant", demoReply("replicate")); return; }
+            const b64 = await new Promise((resolve, reject) => {
+              const r = new FileReader();
+              r.onload = () => resolve(String(r.result).split(",")[1]);
+              r.onerror = () => reject(new Error("Could not read the image file."));
+              r.readAsDataURL(file);
+            });
+            const d = await callApi({ action: "replicate_dashboard", image_base64: b64, media_type: file.type, target_platform: platform });
+            addMessage("assistant", `### ${platform} blueprint\n${d.compiled_report_blueprint || ""}`);
+          });
+        };
 
-        const handleFileDrop = async (e) => {
+        // ---- Engineer: ingestion + views ----------------------------------
+        const handleFileDrop = (e) => {
           e.preventDefault();
           setIsDragging(false);
           const files = e.dataTransfer ? e.dataTransfer.files : e.target.files;
           if (!files || files.length === 0) return;
-          
-          setIsLoading(true);
-          setUploadStatus(`Superposition Core: Uploading raw streaming asset ${files[0].name}...`);
-          await sleep(1500);
-          setUploadStatus("");
-          addMessage("assistant", `🎉 **Superposition Ingestion Verified:** File data structure \`${files[0].name}\` streamed blind directly into S3 Bronze Landing Vault. Metacognition pipeline cleaning data states out-of-band.`);
-          setActiveTab("chat");
-          setIsLoading(false);
+          setFormError("");
+          if (!/^s3:\/\/[a-z0-9.\-]{3,63}\/.+/.test(s3Path.trim())) { setFormError("Target must look like s3://bucket/key."); return; }
+          try { JSON.parse(contextPayload); } catch (_) { setFormError("Context payload must be valid JSON."); return; }
+          if (!DEMO_MODE) {
+            addMessage("assistant", "⚠️ **Upload isn't connected.** The backend has no presigned-upload action yet, so nothing was sent.");
+            setActiveTab("chat");
+            return;
+          }
+          run(async () => {
+            setUploadStatus(`Uploading ${files[0].name} (simulated)…`);
+            await sleep(1200);
+            setUploadStatus("");
+            addMessage("assistant", `### Ingestion (simulated)\n${files[0].name} was not sent anywhere. In live mode it would land at ${s3Path.trim()}.`);
+            setActiveTab("chat");
+          });
         };
 
-        const handleCreateView = async () => {
-          if (!viewNameInput.trim()) return;
-          setIsLoading(true);
-          await sleep(1000);
-          addMessage("assistant", `### ⚙️ View Materialized Successfully\nDeployed custom layout view: \`custom_gold_${viewNameInput}\` into database catalog \`glue_db_cvvdr97yl50zyt\`.\nExpression pattern: \`${viewQueryInput}\``);
-          setViewNameInput("");
-          setIsLoading(false);
+        const handleCreateView = () => {
+          setFormError("");
+          if (!VIEW_NAME_RE.test(viewName)) { setFormError("View name: letters, digits and underscores only, starting with a letter."); return; }
+          if (!/tenant_id\s*=\s*'[^']+'/i.test(viewQuery)) { setFormError("The query needs a tenant_id = '<tenant>' filter."); return; }
+          run(async () => {
+            if (DEMO_MODE) {
+              await sleep(800);
+              addMessage("assistant", `### View deployment (simulated)\nWould create \`samm_view_${viewName}\` in \`glue_db_cvvdr97yl50zyt\`. Nothing was deployed.`);
+              return;
+            }
+            const d = await callApi({ action: "materialize_view", view_name: viewName, query_logic: viewQuery });
+            addMessage("assistant", `### View deployed\n${d.message || "Done."}\nExecution: ${d.execution_id || "n/a"}`);
+          });
         };
 
+        // ---- Admin: governance --------------------------------------------
         const handleAddUserPolicy = (e) => {
           e.preventDefault();
-          if (!newEmail.trim()) return;
-          setAdminUsers(prev => [...prev, { email: newEmail.trim(), role: newRole, tenant: "Client_Alpha_London" }]);
-          setNewEmail("");
-          addMessage("assistant", `🔒 **Security Governance Audit:** User authorization state changed. Profile \`${newEmail}\` provisioned natively as **${newRole.toUpperCase()}** access tier.`);
+          const email = newEmail.trim().toLowerCase();
+          const tenant = newTenant.trim();
+          setFormError("");
+          if (!EMAIL_RE.test(email)) { setFormError("Enter a valid email address."); return; }
+          if (!TENANT_RE.test(tenant)) { setFormError("Tenant: letters, digits, _ and - only (max 64)."); return; }
+          run(async () => {
+            if (DEMO_MODE) await sleep(500);
+            else await callApi({ action: "provision_user", user_email: email, role: newRole, tenant_id: tenant });
+            setAdminUsers((prev) => [...prev.filter((u) => u.email !== email), { email, role: newRole, tenant }]);
+            setNewEmail("");
+            addMessage("assistant", `🔒 **Access policy ${DEMO_MODE ? "(simulated) " : ""}updated:** ${email} is now **${newRole}** on ${tenant}.`);
+          });
         };
 
         const navClass = (tab, disabled) =>
+          `w-full text-left px-4 py-3 rounded-lg text-sm font-medium transition focus:outline-none focus:ring-2 focus:ring-amber-500 ${
+            disabled ? "text-gray-600 cursor-not-allowed" : activeTab === tab ? "bg-[#2D2D2D] text-amber-500" : "text-gray-300 hover:bg-[#242424]"
+          }`;
+        const go = (tab, disabled) => { if (!disabled) setActiveTab(tab); };
+
+        return (
+          <div className="flex flex-col md:flex-row min-h-screen">
+            <aside className="md:w-72 md:min-h-screen bg-[#202020] border-b md:border-b-0 md:border-r border-[#2D2D2D] p-5 space-y-5">
+              <div>
+                <h1 className="text-lg font-semibold">SAMM Core AI Platform</h1>
+                <p className="text-xs text-gray-500 mt-1">{DEMO_MODE ? "Demo mode: responses are simulated" : "Connected to live backend"}</p>
+              </div>
+              <label className="block text-xs text-gray-400">
+                {DEMO_MODE ? "Role profile" : "Workspace view (server enforces access)"}
+                <select className={field + " mt-1"} value={systemRole} onChange={(e) => setSystemRole(e.target.value)}>
+                  {ROLES.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
+                </select>
+              </label>
+              <label className="block text-xs text-gray-400">
+                Persona
+                <select className={field + " mt-1"} value={activePersona} onChange={(e) => setActivePersona(e.target.value)}>
+                  {PERSONAS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+                </select>
+              </label>
+              {!DEMO_MODE && (
+                <label className="block text-xs text-gray-400">
+                  Access token
+                  <input type="password" className={field + " mt-1"} value={token} onChange={(e) => setToken(e.target.value)} placeholder="Paste token (kept in memory only)" />
+                </label>
+              )}
+              <nav className="space-y-1" aria-label="Workspaces">
+                <button className={navClass("chat", false)} onClick={() => go("chat", false)}>Chat and reports</button>
+                <button className={navClass("onboarding", !canOnboard)} disabled={!canOnboard} onClick={() => go("onboarding", !canOnboard)}>Ingestion and views</button>
+                <button className={navClass("governance", !isAdmin)} disabled={!isAdmin} onClick={() => go("governance", !isAdmin)}>User access</button>
+              </nav>
+            </aside>
+
+            <main className="flex-1 flex flex-col p-5 max-w-4xl w-full mx-auto">
+              {formError && <div role="alert" className="mb-3 text-sm text-red-400 bg-[#2a1d1d] border border-red-900 rounded px-3 py-2">{formError}</div>}
+
+              {activeTab === "chat" && (
+                <>
+                  <div className="flex-1 space-y-3 overflow-y-auto pb-4" style={{ maxHeight: "calc(100vh - 230px)" }}>
+                    {messages.map((m) => (
+                      <div key={m.id} className={`p-4 rounded-lg text-sm ${m.role === "user" ? "bg-[#3a2f12] ml-12" : "bg-[#242424] mr-12"}`}>
+                        <Rich text={m.content} />
+                        <ResultTable rows={m.rows} />
+                        <div className="text-[11px] text-gray-500 mt-2">{m.timestamp}</div>
+                      </div>
+                    ))}
+                    {isLoading && <div className="text-sm text-gray-400 px-2">Working…</div>}
+                    <div ref={messagesEndRef} />
+                  </div>
+                  {isAnalyst && (
+                    <div className="flex flex-wrap items-center gap-2 mb-2 text-xs text-gray-400">
+                      <span>Replicate a dashboard screenshot as</span>
+                      <select className="bg-[#111] border border-[#2D2D2D] rounded px-2 py-1" value={platform} onChange={(e) => setPlatform(e.target.value)}>
+                        {PLATFORMS.map((p) => <option key={p}>{p}</option>)}
+                      </select>
+                      <label className="px-3 py-1 rounded border border-[#2D2D2D] hover:bg-[#242424] cursor-pointer focus-within:ring-2 focus-within:ring-amber-500">
+                        Choose image
+                        <input type="file" accept="image/png,image/jpeg" className="sr-only" onChange={handleReplicate} disabled={isLoading} />
+                      </label>
+                    </div>
+                  )}
+                  <form onSubmit={handleSendMessage} className="flex gap-2">
+                    <input className={field} value={input} onChange={(e) => setInput(e.target.value)} placeholder="Ask about the gold layer…" aria-label="Message" />
+                    <button className={btn} disabled={isLoading || !input.trim()}>Send</button>
+                  </form>
+                </>
+              )}
+
+              {activeTab === "onboarding" && canOnboard && (
+                <div className="space-y-8">
+                  <section className="space-y-3">
+                    <h2 className="text-base font-semibold">Ingest a file</h2>
+                    <label className="block text-xs text-gray-400">Target path
+                      <input className={field + " mt-1 font-mono"} value={s3Path} onChange={(e) => setS3Path(e.target.value)} />
+                    </label>
+                    <label className="block text-xs text-gray-400">Context (JSON)
+                      <textarea rows={2} className={field + " mt-1 font-mono"} value={contextPayload} onChange={(e) => setContextPayload(e.target.value)} />
+                    </label>
+                    <label
+                      onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+                      onDragLeave={() => setIsDragging(false)}
+                      onDrop={handleFileDrop}
+                      className={`block text-center text-sm rounded-lg border-2 border-dashed p-8 cursor-pointer ${isDragging ? "border-amber-500 bg-[#2a2415]" : "border-[#2D2D2D] hover:bg-[#202020]"}`}
+                    >
+                      {uploadStatus || "Drop a file here, or click to choose one"}
+                      <input type="file" className="sr-only" onChange={handleFileDrop} disabled={isLoading} />
+                    </label>
+                  </section>
+                  <section className="space-y-3">
+                    <h2 className="text-base font-semibold">Deploy a view</h2>
+                    <label className="block text-xs text-gray-400">View name (created as samm_view_&lt;name&gt;)
+                      <input className={field + " mt-1 font-mono"} value={viewName} onChange={(e) => setViewName(e.target.value)} />
+                    </label>
+                    <label className="block text-xs text-gray-400">Query (read gold_accounts_profile_matrix, filter on your tenant_id)
+                      <textarea rows={4} className={field + " mt-1 font-mono"} value={viewQuery} onChange={(e) => setViewQuery(e.target.value)} />
+                    </label>
+                    <button className={btn} onClick={handleCreateView} disabled={isLoading}>Deploy view</button>
+                  </section>
+                </div>
+              )}
+
+              {activeTab === "governance" && isAdmin && (
+                <div className="space-y-6">
+                  <h2 className="text-base font-semibold">User access</h2>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm border border-[#2D2D2D]">
+                      <thead><tr className="bg-[#2D2D2D] text-amber-500 text-left"><th className="px-3 py-2">Email</th><th className="px-3 py-2">Role</th><th className="px-3 py-2">Tenant</th></tr></thead>
+                      <tbody>
+                        {adminUsers.map((u) => (
+                          <tr key={u.email} className="border-t border-[#2D2D2D]"><td className="px-3 py-2">{u.email}</td><td className="px-3 py-2">{u.role}</td><td className="px-3 py-2">{u.tenant}</td></tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <form onSubmit={handleAddUserPolicy} className="grid gap-3 md:grid-cols-4 items-end">
+                    <label className="text-xs text-gray-400 md:col-span-2">Email
+                      <input className={field + " mt-1"} value={newEmail} onChange={(e) => setNewEmail(e.target.value)} placeholder="name@company.com" />
+                    </label>
+                    <label className="text-xs text-gray-400">Role
+                      <select className={field + " mt-1"} value={newRole} onChange={(e) => setNewRole(e.target.value)}>
+                        {ROLES.map((r) => <option key={r.value} value={r.value}>{r.value}</option>)}
+                      </select>
+                    </label>
+                    <label className="text-xs text-gray-400">Tenant
+                      <input className={field + " mt-1"} value={newTenant} onChange={(e) => setNewTenant(e.target.value)} />
+                    </label>
+                    <button className={btn + " md:col-span-4 md:w-fit"} disabled={isLoading}>Save access</button>
+                  </form>
+                </div>
+              )}
+            </main>
+          </div>
+        );
+      }
+
+      ReactDOM.createRoot(document.getElementById("root")).render(<SammConsole />);
+    </script>
+  </body>
+</html>
