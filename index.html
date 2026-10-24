@@ -115,7 +115,26 @@
         }, [messages, isLoading]);
 
         const addMessage = (role, content, rows) => setMessages((prev) => [...prev, makeMsg(role, content, rows)]);
-        const canOnboard = CAN_ONBOARD.includes(systemRole);
+        // Strict Role Responsibility Mapping Matrix
+        const isEngineer = ["engineer", "admin"].includes(systemRole);
+        const isAnalyst = ["analyst", "viewer", "engineer", "admin"].includes(systemRole);
+        const canOnboard = isEngineer; // Keeps compatibility with any existing buttons
+
+        // Automatically evict non-privileged users from backend data pipelines
+        useEffect(() => {
+          if (!isEngineer && activeTab === "onboarding") {
+            setActiveTab("chat");
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: `sys-${Date.now()}`,
+                role: "assistant",
+                content: "⚠️ **Access Policy Enforcement:** Your active profile limits you strictly to reports and views. Pipeline management from Silver to Gold is locked for your role.",
+                timestamp: new Date().toLocaleTimeString()
+              }
+            ]);
+          }
+        }, [systemRole, activeTab]);
 
         const handleRoleChange = (role) => {
           setSystemRole(role);
