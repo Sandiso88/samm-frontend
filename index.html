@@ -403,6 +403,269 @@
         );
       }
 
+
+      // ------------------------------------------------------------------
+      // Data Onboarding hub (live): upload -> Bronze -> Silver -> field mapping -> Gold view
+      // ------------------------------------------------------------------
+      const STAGES = [["upload", "Upload"], ["bronze", "Bronze"], ["silver", "Silver"], ["map", "Map fields"], ["gold", "Gold view"]];
+      const ACCEPT = ".xlsx,.xlsm,.csv,.tsv,.json,.jsonl,.txt,.pdf,.docx,.pptx,.png,.jpg,.jpeg,.xml,.parquet,.zip,.md,.log";
+
+      async function putFile(url, file) {
+        let res;
+        try {
+          res = await fetch(url, { method: "PUT", body: file });
+        } catch (_) {
+          throw new ApiError("The browser could not upload the file to S3.", [
+            "The S3 bucket needs a CORS rule that allows PUT from this site (" + window.location.origin + "). Run deploy_samm.py again with --origin set to this address.",
+            "The upload link lasts 15 minutes; try again if it expired.",
+          ], 0);
+        }
+        if (!res.ok) {
+          throw new ApiError("S3 refused the upload (HTTP " + res.status + ").", [
+            "The upload link may have expired; try again.",
+            "The SAMM Lambda role must be allowed to write to the bucket (s3:PutObject).",
+          ], res.status);
+        }
+      }
+
+      function ErrBox({ err }) {
+        if (!err) return null;
+        return (
+          <div className="mt-2 bg-[#2A1515] border border-red-900 rounded-lg p-3 text-xs text-red-200" data-testid="onb-error">
+            <div className="font-bold">{err.status ? "Error " + err.status : "Error"}: {err.message}</div>
+            {(err.details || []).length > 0 && (
+              <ul className="list-disc ml-5 mt-1 space-y-0.5 text-red-300">
+                {err.details.map((d, i) => <li key={i}>{d}</li>)}
+              </ul>
+            )}
+          </div>
+        );
+      }
+
+      function OnboardingHub({ session, onAsk, onViewsChanged }) {
+        const [items, setItems] = useState([]);
+        const [over, setOver] = useState(false);
+        const [pipe, setPipe] = useState({ busy: false, msg: "", err: null });
+        const seq = useRef(0);
+        const itemsRef = useRef([]);
+        itemsRef.current = items;
+        const api = (payload) => callBackend(session.url, session.token, payload);
+        const upd = (id, patch) => setItems((p) => p.map((i) => (i.id === id ? { ...i, ...patch } : i)));
+        const updDs = (id, ds, patch) =>
+          setItems((p) => p.map((i) => (i.id === id ? { ...i, datasets: { ...i.datasets, [ds]: { ...i.datasets[ds], ...patch } } } : i)));
+
+        const loadMapping = async (id, ds) => {
+          const pm = await api({ action: "profile_map", dataset: ds });
+          const edits = {};
+          pm.rows.forEach((r) => { edits[r.name] = r.target || ""; });
+          setItems((p) => p.map((i) => (i.id === id ? { ...i, datasets: { ...i.datasets, [ds]: { rows: pm.rows, targets: pm.targets, edits, estimated: pm.estimated_rows, building: false, built: null, error: null } } } : i)));
+        };
+
+        const runFile = async (id, file) => {
+          try {
+            upd(id, { stage: "upload", msg: "Requesting a secure upload link..." });
+            const init = await api({ action: "upload_init", filename: file.name, size: file.size });
+            upd(id, { msg: "Uploading to Bronze..." });
+            await putFile(init.upload_url, file);
+            upd(id, { stage: "bronze", msg: "Stored in Bronze. Structuring..." });
+            const ing = await api({ action: "ingest", key: init.key });
+            if (ing.mode === "archived") {
+              upd(id, { stage: "done", msg: ing.note, done: true });
+              return;
+            }
+            let names = [];
+            if (ing.mode === "done") {
+              names = ing.datasets.map((d) => d.dataset);
+            } else {
+              upd(id, { stage: "silver", msg: ing.note + " Waiting for it to finish (up to 2 minutes)..." });
+              for (let n = 0; n < 24 && names.length === 0; n++) {
+                await sleep(5000);
+                const r = await api({ action: "datasets", since: ing.since });
+                names = r.datasets.map((d) => d.dataset);
+              }
+              if (names.length === 0) {
+                throw new ApiError("The orchestrator has not produced any dataset yet.", [
+                  "It may still be running: use 'Check for new datasets' below in a minute.",
+                  "Check the CloudWatch logs of shiftleft-superposition-pipeline-orchestrator for errors.",
+                ], 0);
+              }
+            }
+            upd(id, { stage: "map", msg: "Reading columns and suggesting field mappings...", order: names, datasets: {} });
+            for (const ds of names) await loadMapping(id, ds);
+            upd(id, { msg: "Review the suggested mapping, then build the Gold view." });
+          } catch (err) {
+            upd(id, { error: err, msg: "Stopped." });
+          }
+        };
+
+        const addFiles = (fileList) => {
+          Array.from(fileList || []).forEach((file) => {
+            const id = "f" + ++seq.current;
+            setItems((p) => [{ id, name: file.name, size: file.size, stage: "upload", msg: "Queued", datasets: {}, order: [], error: null, done: false }, ...p]);
+            runFile(id, file);
+          });
+        };
+
+        const build = async (id, ds) => {
+          const it = itemsRef.current.find((i) => i.id === id);
+          const d = it.datasets[ds];
+          const mapping = {};
+          d.rows.forEach((r) => { if (r.status !== "skip") mapping[r.name] = (d.edits[r.name] || "").trim() || null; });
+          updDs(id, ds, { building: true, error: null });
+          try {
+            const res = await api({ action: "build_view", dataset: ds, mapping });
+            updDs(id, ds, { building: false, built: res });
+            upd(id, { stage: "gold", done: true, msg: "Gold view ready." });
+            onViewsChanged();
+          } catch (err) {
+            updDs(id, ds, { building: false, error: err });
+          }
+        };
+
+        const runPipeline = async () => {
+          setPipe({ busy: true, msg: "", err: null });
+          try {
+            const r = await api({ action: "run_pipeline" });
+            setPipe({ busy: false, msg: "Pipeline started (" + r.function + "). Files already in Bronze are being converted. Click 'Check for new datasets' in a minute.", err: null });
+          } catch (err) {
+            setPipe({ busy: false, msg: "", err });
+          }
+        };
+
+        const checkNew = async () => {
+          setPipe({ busy: true, msg: "", err: null });
+          try {
+            const r = await api({ action: "datasets" });
+            const fresh = r.datasets.filter((d) => !d.view);
+            if (fresh.length === 0) {
+              setPipe({ busy: false, msg: "No datasets are waiting for a Gold view.", err: null });
+              return;
+            }
+            const id = "f" + ++seq.current;
+            const order = fresh.map((d) => d.dataset);
+            setItems((p) => [{ id, name: "Datasets already in Silver", size: 0, stage: "map", msg: "Review the suggested mapping, then build the Gold view.", datasets: {}, order, error: null, done: false }, ...p]);
+            for (const ds of order) await loadMapping(id, ds);
+            setPipe({ busy: false, msg: order.length + " dataset(s) found without a Gold view.", err: null });
+          } catch (err) {
+            setPipe({ busy: false, msg: "", err });
+          }
+        };
+
+        const badge = (st) => {
+          const c = { auto: "bg-green-900 text-green-200", review: "bg-amber-900 text-amber-200", saved: "bg-blue-900 text-blue-200", new: "bg-[#333] text-[#BBB]", skip: "bg-[#333] text-[#777]" }[st] || "bg-[#333] text-[#BBB]";
+          return <span className={"px-2 py-0.5 rounded text-[10px] font-mono " + c}>{st}</span>;
+        };
+
+        return (
+          <div className="max-w-4xl mx-auto space-y-5" data-testid="onboarding-hub">
+            <div className="bg-[#222222] border border-[#2D2D2D] rounded-xl p-6 shadow-xl space-y-4">
+              <div>
+                <h2 className="text-lg font-bold text-white">📦 Data Onboarding</h2>
+                <p className="text-xs text-[#A0A0A0] mt-1">Upload raw files. SAMM lands them in Bronze, structures them in Silver, suggests how their fields map to your standard names, and builds a Gold view the chat can query. csv, tsv, json, jsonl, txt and Excel are structured; other formats are archived untouched.</p>
+              </div>
+              <label
+                htmlFor="onb-file"
+                onDragOver={(e) => { e.preventDefault(); setOver(true); }}
+                onDragLeave={() => setOver(false)}
+                onDrop={(e) => { e.preventDefault(); setOver(false); addFiles(e.dataTransfer.files); }}
+                className={"block cursor-pointer text-center rounded-xl border-2 border-dashed p-8 text-sm transition " + (over ? "border-amber-500 bg-[#2A2418]" : "border-[#3D3D3D] hover:border-amber-600")}
+              >
+                <div className="text-white font-semibold">Drop files here, or click to choose</div>
+                <div className="text-[11px] text-[#808080] mt-1">Up to 25 MB for csv/json/txt, 50 MB for Excel, 100 MB for archives</div>
+                <input id="onb-file" data-testid="onb-file" type="file" multiple accept={ACCEPT} className="hidden" onChange={(e) => { addFiles(e.target.files); e.target.value = ""; }} />
+              </label>
+              <div className="flex flex-wrap items-center gap-3">
+                <button onClick={runPipeline} disabled={pipe.busy} className="border border-[#3D3D3D] hover:border-amber-500 text-xs text-white px-3 py-2 rounded-lg disabled:opacity-50">▶ Run pipeline now</button>
+                <button onClick={checkNew} disabled={pipe.busy} className="border border-[#3D3D3D] hover:border-amber-500 text-xs text-white px-3 py-2 rounded-lg disabled:opacity-50">🔎 Check for new datasets</button>
+                <span className="text-[11px] text-[#808080]">Run pipeline = convert files already in Bronze with your orchestrator.</span>
+              </div>
+              {pipe.msg && <div className="text-xs text-green-300">{pipe.msg}</div>}
+              <ErrBox err={pipe.err} />
+            </div>
+
+            {items.map((it) => {
+              const idx = STAGES.findIndex((s) => s[0] === it.stage);
+              return (
+                <div key={it.id} className="bg-[#222222] border border-[#2D2D2D] rounded-xl p-5 shadow space-y-3" data-testid="onb-item">
+                  <div className="flex justify-between items-center">
+                    <div className="text-sm text-white font-mono truncate">{it.name}</div>
+                    {it.size > 0 && <div className="text-[11px] text-[#808080]">{(it.size / 1024).toFixed(0)} KB</div>}
+                  </div>
+                  <div className="flex flex-wrap gap-2 text-[11px] font-mono">
+                    {STAGES.map((s, n) => (
+                      <span key={s[0]} className={"px-2 py-1 rounded border " + (it.done || n < idx ? "border-green-700 text-green-300" : n === idx && !it.error ? "border-amber-500 text-amber-300" : "border-[#333] text-[#707070]")}>
+                        {(it.done || n < idx ? "✓ " : "") + s[1]}
+                      </span>
+                    ))}
+                  </div>
+                  <div className="text-xs text-[#C0C0C0]" data-testid="onb-msg">{it.msg}</div>
+                  <ErrBox err={it.error} />
+
+                  {(it.order || []).map((ds) => {
+                    const d = it.datasets[ds];
+                    if (!d) return null;
+                    return (
+                      <div key={ds} className="border border-[#2D2D2D] rounded-lg p-4 space-y-3 bg-[#1D1D1D]" data-testid="onb-dataset">
+                        <div className="flex justify-between items-center">
+                          <div className="text-sm text-amber-400 font-mono">{ds}</div>
+                          <div className="text-[11px] text-[#808080]">about {d.estimated} rows · {d.rows.length} fields</div>
+                        </div>
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-xs">
+                            <thead>
+                              <tr className="text-left text-[#808080]">
+                                <th className="py-1 pr-3">Source field</th><th className="pr-3">Type</th><th className="pr-3">Filled</th><th className="pr-3">Examples</th><th className="pr-3">Maps to</th><th>Match</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {d.rows.map((r) => (
+                                <tr key={r.name} className="border-t border-[#2A2A2A]">
+                                  <td className="py-1.5 pr-3 font-mono text-white">{r.name}</td>
+                                  <td className="pr-3 text-[#A0A0A0]">{r.kind}</td>
+                                  <td className="pr-3 text-[#A0A0A0]">{r.fill_pct}%</td>
+                                  <td className="pr-3 text-[#808080] max-w-[160px] truncate" title={r.samples.join(", ")}>{r.samples.join(", ")}</td>
+                                  <td className="pr-3">
+                                    {r.status === "skip" ? <span className="text-[#606060]">skipped</span> : (
+                                      <input
+                                        list={"targets-" + it.id}
+                                        aria-label={"Maps to for " + r.name}
+                                        value={d.edits[r.name] || ""}
+                                        disabled={!!d.built}
+                                        placeholder={r.name + " (keep)"}
+                                        onChange={(e) => updDs(it.id, ds, { edits: { ...d.edits, [r.name]: e.target.value } })}
+                                        className="w-44 bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-white font-mono focus:outline-none focus:border-amber-500 disabled:opacity-60"
+                                      />
+                                    )}
+                                  </td>
+                                  <td>{badge(r.status)} {r.confidence > 0 && <span className="text-[10px] text-[#707070]">{Math.round(r.confidence * 100)}%</span>}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                          <datalist id={"targets-" + it.id}>{d.targets.map((t) => <option key={t} value={t} />)}</datalist>
+                        </div>
+                        <p className="text-[11px] text-[#707070]">Leave "Maps to" empty to keep the field's own name. Names must be lowercase letters, digits and underscores.</p>
+                        <ErrBox err={d.error} />
+                        {d.built ? (
+                          <div className="flex flex-wrap items-center gap-3 text-xs" data-testid="onb-built">
+                            <span className="text-green-300">✓ Built <span className="font-mono">{d.built.view}</span> ({d.built.rows == null ? "?" : d.built.rows} rows, {d.built.mapped} fields mapped)</span>
+                            <button onClick={() => onAsk(d.built.view)} className="bg-amber-600 hover:bg-amber-500 text-white font-bold px-3 py-1.5 rounded-lg">Ask about this dataset</button>
+                          </div>
+                        ) : (
+                          <button onClick={() => build(it.id, ds)} disabled={d.building} data-testid="onb-build" className="bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-bold text-sm px-4 py-2 rounded-lg">
+                            {d.building ? "Building Gold view..." : "Approve mapping & build Gold view"}
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
+        );
+      }
+
       // ------------------------------------------------------------------
       // Main app
       // ------------------------------------------------------------------
@@ -435,6 +698,20 @@
         const [s3Path, setS3Path] = useState("s3://shiftleft-superposition-ingest-vault/CS.json");
         const [contextPayload, setContextPayload] = useState('{"environment": "production", "batch_priority": "high"}');
         const [formError, setFormError] = useState("");
+        const [views, setViews] = useState([]);
+        const [defaultView, setDefaultView] = useState("");
+        const [activeView, setActiveView] = useState("");
+        const loadViews = async () => {
+          if (demo) return;
+          try {
+            const r = await callBackend(session.url, session.token, { action: "views" });
+            setViews(r.views || []);
+            setDefaultView(r.default || "");
+          } catch (_) {
+            /* older backend without datasets: the chat still works on the default view */
+          }
+        };
+        useEffect(() => { loadViews(); }, []);
 
         const messagesEndRef = useRef(null);
         useEffect(() => {
@@ -486,7 +763,7 @@
               d = demoQuery(userText);
             } else {
               // Note: no role and no tenant are sent. The server derives both from the token.
-              d = await callBackend(session.url, session.token, { action: "query", prompt: userText, persona });
+              d = await callBackend(session.url, session.token, { action: "query", prompt: userText, persona, view: activeView && activeView !== defaultView ? activeView : undefined });
             }
             const msgId = "r" + ++nextId.current;
             const { inline, sqlArt } = registerArtifacts(msgId, d.report_markdown, d.executed_sql);
@@ -620,6 +897,20 @@
                 </div>
                 <div className="flex items-center space-x-4 text-xs font-mono text-[#A0A0A0]">
                   <span>👤 {String(role).toUpperCase()}</span>
+                  {!demo && views.length > 1 && (
+                    <label className="flex items-center space-x-1">
+                      <span>📚</span>
+                      <select
+                        aria-label="Dataset"
+                        data-testid="dataset-select"
+                        value={activeView || defaultView}
+                        onChange={(e) => setActiveView(e.target.value)}
+                        className="bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-xs text-white font-mono max-w-[220px] focus:outline-none focus:border-amber-500"
+                      >
+                        {views.map((v) => <option key={v.name} value={v.name}>{v.name.replace(/^gold_ai_/, "")}</option>)}
+                      </select>
+                    </label>
+                  )}
                   <span>💾 Workgroup: shiftleft-superposition</span>
                   <button
                     onClick={() => setPanelOpen((o) => !o)}
@@ -675,7 +966,20 @@
                   </div>
                 )}
 
-                {activeTab === "onboarding" && (
+                {activeTab === "onboarding" && !demo && (
+                  <OnboardingHub
+                    session={session}
+                    onViewsChanged={loadViews}
+                    onAsk={(v) => {
+                      loadViews();
+                      setActiveView(v);
+                      setActiveTab("chat");
+                      addMessage({ role: "assistant", text: "Now answering from the dataset **" + v.replace(/^gold_ai_/, "") + "**. Ask a question, for example: How many records are there?" });
+                    }}
+                  />
+                )}
+
+                {activeTab === "onboarding" && demo && (
                   <div className="max-w-2xl mx-auto bg-[#222222] border border-[#2D2D2D] rounded-xl p-6 shadow-xl space-y-6">
                     <div className="border-b border-[#2D2D2D] pb-4">
                       <h2 className="text-lg font-bold text-white">⚙️ Pipeline Orchestration Hub</h2>
