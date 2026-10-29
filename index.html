@@ -454,6 +454,229 @@
       }
 
 
+
+      // ------------------------------------------------------------------
+      // Mapping + rules editor: the full table you had before, plus rules. Used for new files and for views that already exist.
+      // ------------------------------------------------------------------
+      const DATE_FORMATS = ["dd/MM/yyyy", "MM/dd/yyyy", "yyyyMMdd", "yyyy-MM-dd"];
+      const COMPARE_OPS = ["<=", "<", ">=", ">", "=", "<>"];
+      const ARITH_OPS = ["+", "-", "*", "/"];
+      function MappingEditor({ dataset, jobId, api, onBuilt, onClose, onAsk }) {
+        const [pm, setPm] = useState(null);
+        const [err, setErr] = useState(null);
+        const [edits, setEdits] = useState({});
+        const [rules, setRules] = useState([]);
+        const [hide, setHide] = useState(false);
+        const [tab, setTab] = useState("map");
+        const [busy, setBusy] = useState(false);
+        const [built, setBuilt] = useState(null);
+        const [quality, setQuality] = useState(null);
+        const [nr, setNr] = useState({ kind: "range", column: "", column2: "", name: "", min: "", max: "", values: "", fmt: "dd/MM/yyyy", decimal: ".", op: "<=" });
+        const seq = useRef(0);
+
+        useEffect(() => {
+          let live = true;
+          (async () => {
+            try {
+              const r = await api({ action: "profile_map", dataset });
+              if (!live) return;
+              const e = {};
+              r.rows.forEach((x) => { e[x.name] = (x.status === "auto" || x.status === "saved" || x.status === "duplicate") ? (x.target || "") : ""; });
+              setPm(r); setEdits(e); setRules(r.rules || []); setHide(!!r.hide_failed);
+              setNr((p) => ({ ...p, column: (r.rows.find((x) => x.status !== "skip") || {}).name || "" }));
+            } catch (x) { if (live) setErr(x); }
+          })();
+          return () => { live = false; };
+        }, [dataset]);
+
+        if (!pm) return <div className="text-xs text-[#A0A0A0] p-3" data-testid="editor-loading">{err ? <ErrBox err={err} /> : "Reading the dataset..."}</div>;
+        const cols = pm.rows.filter((r) => r.status !== "skip").map((r) => r.name);
+        const canTech = pm.can_edit, canBiz = pm.can_edit_business;
+        const locked = !pm.can_edit;
+        const setRule = (i, patch) => setRules((p) => p.map((r, n) => (n === i ? { ...r, ...patch } : r)));
+        const setParam = (i, k, v) => setRules((p) => p.map((r, n) => (n === i ? { ...r, params: { ...(r.params || {}), [k]: v } } : r)));
+        const ruleLocked = (r) => (r.cls === "business" ? !canBiz : !canTech);
+        const label = (r) => (pm.rule_kinds[r.kind] || {}).help || r.kind;
+        const addRule = () => {
+          const k = nr.kind;
+          const r = { id: "u" + (++seq.current) + Date.now().toString(36).slice(-4), kind: k, cls: (pm.rule_kinds[k] || {}).cls, column: nr.column, status: "active", origin: "user", params: {} };
+          if (k === "range") r.params = { min: nr.min === "" ? null : Number(nr.min), max: nr.max === "" ? null : Number(nr.max) };
+          if (k === "allowed") r.params = { values: nr.values };
+          if (k === "to_date") r.params = { fmt: nr.fmt };
+          if (k === "to_number") r.params = { decimal: nr.decimal };
+          if (k === "compare") { r.column2 = nr.column2 || cols[0]; r.params = { op: nr.op }; }
+          if (k === "derive") { r.column2 = nr.column2 || cols[0]; r.params = { op: ARITH_OPS.includes(nr.op) ? nr.op : "-" }; r.name = nr.name; }
+          setRules((p) => [...p, r]);
+        };
+        const addSuggested = () => {
+          const have = new Set(rules.map((r) => [r.kind, r.column, r.column2 || ""].join("|")));
+          setRules((p) => [...p, ...(pm.suggested_rules || []).filter((s2) => !have.has([s2.kind, s2.column, s2.column2 || ""].join("|")))]);
+        };
+        const build = async () => {
+          const mapping = {};
+          pm.rows.forEach((r) => { if (r.status !== "skip") mapping[r.name] = (edits[r.name] || "").trim() || null; });
+          const payload = { dataset, mapping, hide_failed: hide, rules: rules.map(({ description, ...rest }) => rest) };
+          setBusy(true); setErr(null);
+          try {
+            let res;
+            if (jobId) { const r = await api({ action: "job_mapped", id: jobId, ...payload }); res = r.built; onBuilt && onBuilt(r.job); }
+            else { res = await api({ action: "build_view", ...payload }); onBuilt && onBuilt(null); }
+            setBuilt(res);
+          } catch (e) { setErr(e); } finally { setBusy(false); }
+        };
+        const runQuality = async () => {
+          setBusy(true); setErr(null);
+          try { const r = await api({ action: "dq_report", dataset }); setQuality(r); } catch (e) { setErr(e); } finally { setBusy(false); }
+        };
+        const badge = (st) => {
+          const c = { auto: "bg-green-900 text-green-200", review: "bg-amber-900 text-amber-200", saved: "bg-blue-900 text-blue-200" }[st] || "bg-[#333] text-[#BBB]";
+          return <span className={"px-2 py-0.5 rounded text-[10px] font-mono " + c}>{st}</span>;
+        };
+        const inp = "bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-white font-mono text-xs focus:outline-none focus:border-amber-500 disabled:opacity-60";
+        const tabBtn = (k, t) => <button onClick={() => setTab(k)} data-testid={"tab-" + k} className={"px-3 py-1.5 text-xs rounded-t-md border-b-2 " + (tab === k ? "border-amber-500 text-white" : "border-transparent text-[#808080] hover:text-white")}>{t}</button>;
+        const active = rules.filter((r) => r.status === "active").length;
+
+        return (
+          <div className="border border-amber-800 rounded-lg p-4 space-y-3 bg-[#1D1D1D]" data-testid="mapping-editor">
+            <div className="flex flex-wrap justify-between items-center gap-2">
+              <div>
+                <div className="text-sm text-amber-400 font-mono">{dataset}</div>
+                <div className="text-[11px] text-[#808080]">{pm.view_exists ? "Existing view " + pm.view + " · owner " + pm.owner : "New view " + pm.view} · about {pm.estimated_rows} rows · {pm.rows.length} fields</div>
+              </div>
+              {onClose && <button onClick={onClose} className="text-xs text-[#A0A0A0] hover:text-white underline">Close</button>}
+            </div>
+            {locked && <div data-testid="editor-locked" className="text-xs text-amber-300 bg-[#241E10] border border-amber-800 rounded p-2">You can look at this view but not change it. Only its owner ({pm.owner}) or an administrator can.</div>}
+            <div className="flex gap-1 border-b border-[#2D2D2D]">{tabBtn("map", "Field mapping")}{tabBtn("rules", "Rules (" + active + " active)")}</div>
+
+            {tab === "map" && (
+              <div className="space-y-2">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead><tr className="text-left text-[#808080]"><th className="py-1 pr-3">Source field</th><th className="pr-3">Type</th><th className="pr-3">Filled</th><th className="pr-3">Examples</th><th className="pr-3">Maps to</th><th>Match</th></tr></thead>
+                    <tbody>
+                      {pm.rows.map((r) => (
+                        <tr key={r.name} className="border-t border-[#2A2A2A]">
+                          <td className="py-1.5 pr-3 font-mono text-white">{r.name}</td>
+                          <td className="pr-3 text-[#A0A0A0]">{r.kind}</td>
+                          <td className="pr-3 text-[#A0A0A0]">{r.fill_pct}%</td>
+                          <td className="pr-3 text-[#808080] max-w-[160px] truncate" title={r.samples.join(", ")}>{r.samples.join(", ")}</td>
+                          <td className="pr-3">
+                            {r.status === "skip" ? <span className="text-[#606060]">skipped</span> : r.status === "duplicate" ? (
+                              <label className="flex items-center gap-2 text-[11px] text-[#C0C0C0]" title={r.reason}>
+                                <input type="checkbox" aria-label={"Hide " + r.name} disabled={locked || !!built} checked={edits[r.name] === "-"} onChange={(e) => setEdits({ ...edits, [r.name]: e.target.checked ? "-" : "" })} />
+                                hide (same as {r.duplicate_of})
+                              </label>
+                            ) : (
+                              <div>
+                                <input list={"ed-targets-" + dataset} aria-label={"Maps to for " + r.name} value={edits[r.name] || ""} disabled={locked || !!built} placeholder={r.name + " (keep)"}
+                                  onChange={(e) => setEdits({ ...edits, [r.name]: e.target.value })} className={inp + " w-44"} />
+                                {r.status === "review" && r.target && !locked && !built && (edits[r.name] || "") !== r.target && (
+                                  <button data-testid={"use-" + r.name} onClick={() => setEdits({ ...edits, [r.name]: r.target })} className="block mt-1 text-[10px] text-amber-400 hover:text-amber-300 underline">use suggestion "{r.target}"?</button>
+                                )}
+                              </div>
+                            )}
+                          </td>
+                          <td>{badge(r.status)} {r.confidence > 0 && <span className="text-[10px] text-[#707070]">{Math.round(r.confidence * 100)}%</span>}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <datalist id={"ed-targets-" + dataset}>{pm.targets.map((t) => <option key={t} value={t} />)}</datalist>
+                </div>
+                <p className="text-[11px] text-[#707070]">Leave "Maps to" empty to keep the field's own name. Names must be lowercase letters, digits and underscores.</p>
+                {pm.previous_mapping && !locked && (
+                  <button data-testid="restore-mapping" onClick={() => { const e = { ...edits }; Object.keys(e).forEach((k) => { if (k in pm.previous_mapping) e[k] = pm.previous_mapping[k] || ""; }); setEdits(e); }} className="text-[11px] text-[#A0A0A0] hover:text-white underline">Load the previous mapping into the table</button>
+                )}
+              </div>
+            )}
+
+            {tab === "rules" && (
+              <div className="space-y-3" data-testid="rules-panel">
+                <p className="text-[11px] text-[#707070]">Technical rules change how a field is read. Business rules flag rows that look wrong in a <span className="font-mono">dq_flags</span> column; nothing is deleted. Only rules marked <b>active</b> are applied. Bronze and Silver are never changed.</p>
+                <div className="space-y-2">
+                  {rules.length === 0 && <div className="text-xs text-[#808080]">No rules yet.</div>}
+                  {rules.map((r, i) => {
+                    const dis = ruleLocked(r) || !!built;
+                    return (
+                      <div key={r.id} data-testid="rule-row" className="flex flex-wrap items-center gap-2 text-xs bg-[#151515] border border-[#2D2D2D] rounded-md p-2">
+                        <span className={"px-2 py-0.5 rounded text-[10px] font-mono " + (r.cls === "technical" ? "bg-blue-900 text-blue-200" : "bg-purple-900 text-purple-200")}>{r.cls}</span>
+                        <span className="font-mono text-white">{r.column}</span>
+                        <span className="text-[#A0A0A0]">{label(r)}</span>
+                        {r.kind === "range" && (<>
+                          <input aria-label={"Minimum for " + r.id} type="number" disabled={dis} value={r.params.min == null ? "" : r.params.min} onChange={(e) => setParam(i, "min", e.target.value === "" ? null : Number(e.target.value))} className={inp + " w-20"} placeholder="min" />
+                          <input aria-label={"Maximum for " + r.id} type="number" disabled={dis} value={r.params.max == null ? "" : r.params.max} onChange={(e) => setParam(i, "max", e.target.value === "" ? null : Number(e.target.value))} className={inp + " w-20"} placeholder="max" />
+                        </>)}
+                        {r.kind === "allowed" && <input aria-label={"Allowed values for " + r.id} disabled={dis} value={Array.isArray(r.params.values) ? r.params.values.join(", ") : (r.params.values || "")} onChange={(e) => setParam(i, "values", e.target.value)} className={inp + " w-56"} />}
+                        {r.kind === "to_date" && <select aria-label={"Date format for " + r.id} disabled={dis} value={r.params.fmt} onChange={(e) => setParam(i, "fmt", e.target.value)} className={inp}>{DATE_FORMATS.map((f) => <option key={f}>{f}</option>)}</select>}
+                        {r.kind === "to_number" && <select aria-label={"Decimal mark for " + r.id} disabled={dis} value={r.params.decimal || "."} onChange={(e) => setParam(i, "decimal", e.target.value)} className={inp}><option value=".">decimal point</option><option value=",">decimal comma</option></select>}
+                        {r.kind === "compare" && (<>
+                          <select aria-label={"Comparison for " + r.id} disabled={dis} value={r.params.op} onChange={(e) => setParam(i, "op", e.target.value)} className={inp}>{COMPARE_OPS.map((o) => <option key={o}>{o}</option>)}</select>
+                          <select aria-label={"Other field for " + r.id} disabled={dis} value={r.column2} onChange={(e) => setRule(i, { column2: e.target.value })} className={inp}>{cols.map((c) => <option key={c}>{c}</option>)}</select>
+                        </>)}
+                        {r.kind === "derive" && (<>
+                          <select aria-label={"Operation for " + r.id} disabled={dis} value={r.params.op} onChange={(e) => setParam(i, "op", e.target.value)} className={inp}>{ARITH_OPS.map((o) => <option key={o}>{o}</option>)}</select>
+                          <select aria-label={"Second field for " + r.id} disabled={dis} value={r.column2} onChange={(e) => setRule(i, { column2: e.target.value })} className={inp}>{cols.map((c) => <option key={c}>{c}</option>)}</select>
+                          <input aria-label={"New column name for " + r.id} disabled={dis} value={r.name || ""} onChange={(e) => setRule(i, { name: e.target.value })} className={inp + " w-32"} placeholder="new column" />
+                        </>)}
+                        <select aria-label={"Status for " + r.id} disabled={dis} value={r.status} onChange={(e) => setRule(i, { status: e.target.value })} className={inp + " ml-auto"}>
+                          <option value="active">active</option><option value="suggested">suggested</option><option value="off">off</option>
+                        </select>
+                        {!dis && <button aria-label={"Remove " + r.id} onClick={() => setRules((p) => p.filter((_, n) => n !== i))} className="text-[#808080] hover:text-red-300">✕</button>}
+                        {r.note && <div className="basis-full text-[10px] text-[#707070]">{r.note}{r.confidence ? " (" + Math.round(r.confidence * 100) + "% sure)" : ""}</div>}
+                      </div>
+                    );
+                  })}
+                </div>
+                {!locked && (
+                  <div className="border border-[#2D2D2D] rounded-md p-3 space-y-2">
+                    <div className="text-[11px] text-[#A0A0A0]">Add a rule</div>
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <select aria-label="New rule type" value={nr.kind} onChange={(e) => setNr({ ...nr, kind: e.target.value })} className={inp}>{Object.keys(pm.rule_kinds).map((k) => <option key={k} value={k}>{pm.rule_kinds[k].help}</option>)}</select>
+                      <select aria-label="New rule field" value={nr.column} onChange={(e) => setNr({ ...nr, column: e.target.value })} className={inp}>{cols.map((c) => <option key={c}>{c}</option>)}</select>
+                      {nr.kind === "range" && (<><input aria-label="New rule minimum" type="number" value={nr.min} onChange={(e) => setNr({ ...nr, min: e.target.value })} className={inp + " w-20"} placeholder="min" /><input aria-label="New rule maximum" type="number" value={nr.max} onChange={(e) => setNr({ ...nr, max: e.target.value })} className={inp + " w-20"} placeholder="max" /></>)}
+                      {nr.kind === "allowed" && <input aria-label="New rule values" value={nr.values} onChange={(e) => setNr({ ...nr, values: e.target.value })} className={inp + " w-48"} placeholder="a, b, c" />}
+                      {nr.kind === "to_date" && <select aria-label="New rule date format" value={nr.fmt} onChange={(e) => setNr({ ...nr, fmt: e.target.value })} className={inp}>{DATE_FORMATS.map((f) => <option key={f}>{f}</option>)}</select>}
+                      {nr.kind === "compare" && (<><select aria-label="New rule comparison" value={nr.op} onChange={(e) => setNr({ ...nr, op: e.target.value })} className={inp}>{COMPARE_OPS.map((o) => <option key={o}>{o}</option>)}</select><select aria-label="New rule other field" value={nr.column2} onChange={(e) => setNr({ ...nr, column2: e.target.value })} className={inp}><option value="">(choose)</option>{cols.map((c) => <option key={c}>{c}</option>)}</select></>)}
+                      {nr.kind === "derive" && (<><select aria-label="New rule operation" value={ARITH_OPS.includes(nr.op) ? nr.op : "-"} onChange={(e) => setNr({ ...nr, op: e.target.value })} className={inp}>{ARITH_OPS.map((o) => <option key={o}>{o}</option>)}</select><select aria-label="New rule second field" value={nr.column2} onChange={(e) => setNr({ ...nr, column2: e.target.value })} className={inp}><option value="">(choose)</option>{cols.map((c) => <option key={c}>{c}</option>)}</select><input aria-label="New rule column name" value={nr.name} onChange={(e) => setNr({ ...nr, name: e.target.value })} className={inp + " w-32"} placeholder="new column" /></>)}
+                      <button data-testid="add-rule" onClick={addRule} className="border border-[#3D3D3D] hover:border-amber-500 text-white px-3 py-1 rounded-md">Add</button>
+                      <button data-testid="add-suggested" onClick={addSuggested} className="text-amber-400 hover:text-amber-300 underline">Add SAMM's suggestions I don't have yet</button>
+                    </div>
+                  </div>
+                )}
+                <label className="flex items-center gap-2 text-xs text-[#C0C0C0]">
+                  <input type="checkbox" aria-label="Hide rows that break a rule" disabled={locked || !!built} checked={hide} onChange={(e) => setHide(e.target.checked)} />
+                  Hide rows that break an active business rule from the Gold view (otherwise they are only flagged)
+                </label>
+                {pm.previous_rules && !locked && <button data-testid="restore-rules" onClick={() => setRules(pm.previous_rules)} className="text-[11px] text-[#A0A0A0] hover:text-white underline">Load the previous rules into the list</button>}
+              </div>
+            )}
+
+            <ErrBox err={err} />
+            {built ? (
+              <div className="space-y-2" data-testid="editor-built">
+                <div className="flex flex-wrap items-center gap-3 text-xs">
+                  <span className="text-green-300">✓ Built <span className="font-mono">{built.view}</span> ({built.rows == null ? "?" : built.rows} rows, {built.mapped} fields renamed{built.hidden ? ", " + built.hidden + " hidden" : ""}, {built.rules_applied} rule(s) applied)</span>
+                  <button onClick={() => { setBuilt(null); setQuality(null); }} className="border border-[#3D3D3D] hover:border-amber-500 text-white px-3 py-1.5 rounded-lg" data-testid="edit-again">Edit again</button>
+                  {built.flags && <button onClick={runQuality} disabled={busy} data-testid="run-quality" className="border border-[#3D3D3D] hover:border-amber-500 text-white px-3 py-1.5 rounded-lg disabled:opacity-50">Run quality check</button>}
+                  <button onClick={() => onAsk(built.view)} className="bg-amber-600 hover:bg-amber-500 text-white font-bold px-3 py-1.5 rounded-lg">Ask about this dataset</button>
+                </div>
+                {quality && (
+                  <div data-testid="quality-result" className="text-xs bg-[#151515] border border-[#2D2D2D] rounded-md p-3 space-y-1">
+                    <div className="text-white">{quality.quality.flagged} of {quality.quality.total} rows break at least one rule.</div>
+                    {quality.quality.by_rule.map((r) => <div key={r.id} className="text-[#A0A0A0]">{r.rule}: <b className="text-white">{r.broken_rows}</b></div>)}
+                    {quality.note && <div className="text-[#808080]">{quality.note}</div>}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <button onClick={build} disabled={busy || locked} data-testid="editor-build" className="bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-bold text-sm px-4 py-2 rounded-lg">
+                {busy ? "Building Gold view..." : pm.view_exists ? "Approve changes & rebuild Gold view" : "Approve mapping & rules, build Gold view"}
+              </button>
+            )}
+          </div>
+        );
+      }
+
       // ------------------------------------------------------------------
       // One onboarding job: the back end does the work, this card only shows progress and asks for approvals
       // ------------------------------------------------------------------
@@ -466,6 +689,7 @@
         const [busy, setBusy] = useState(false);
         const [err, setErr] = useState(null);
         const [choice, setChoice] = useState({});
+        const [editing, setEditing] = useState(null);
         const notified = useRef(false);
         useEffect(() => {
           if (!live) return undefined;
@@ -510,9 +734,12 @@
                 <span className="text-[#A0A0A0]">{d.state}</span>
                 {d.view && <span className="text-green-300">→ {d.view}</span>}
                 {d.view && <button onClick={() => onAsk(d.view)} className="underline text-amber-400 hover:text-amber-300">Ask about it</button>}
+                {(d.state === "review" || d.view) && <button data-testid={"job-edit-" + ds} onClick={() => setEditing(editing === ds ? null : ds)} className="underline text-amber-400 hover:text-amber-300">{d.state === "review" ? "Review mapping & rules" : "Edit mapping & rules"}</button>}
                 {d.error && <span className="text-red-300">{d.error}</span>}
               </div>
             ))}
+            {editing && <MappingEditor key={editing} dataset={editing} jobId={(job.datasets[editing] || {}).state === "review" ? job.id : null} api={api} onAsk={onAsk}
+              onBuilt={(j) => { if (j) onUpdate(j); onViewsChanged(); }} onClose={() => setEditing(null)} />}
             {waiting.length > 0 && (
               <div data-testid="job-approvals" className="border border-amber-700 rounded-lg p-3 space-y-2 bg-[#241E10]">
                 <div className="text-xs text-amber-300 font-semibold">SAMM is not sure about these fields. Choose what each one should be, then approve.</div>
@@ -546,11 +773,43 @@
         );
       }
 
+      function GoldViews({ api, onAsk, tick }) {
+        const [rows, setRows] = useState(null);
+        const [open, setOpen] = useState(null);
+        const [err, setErr] = useState(null);
+        const load = async () => { try { const r = await api({ action: "datasets" }); setRows((r.datasets || []).filter((d) => d.view)); } catch (e) { setErr(e); } };
+        useEffect(() => { load(); }, [tick]);
+        if (!rows && !err) return null;
+        return (
+          <div data-testid="gold-views" className="bg-[#222222] border border-[#2D2D2D] rounded-xl p-5 shadow space-y-3">
+            <div>
+              <h3 className="text-sm font-bold text-white">Your Gold views</h3>
+              <p className="text-[11px] text-[#808080] mt-1">Views stay editable after they are built. The owner or an administrator can change the mapping and rules at any time; the old version is kept.</p>
+            </div>
+            <ErrBox err={err} />
+            {rows && rows.length === 0 && <div className="text-xs text-[#808080]">No Gold views yet.</div>}
+            {(rows || []).map((d) => (
+              <div key={d.dataset} data-testid="gold-row" className="border border-[#2D2D2D] rounded-lg p-3 bg-[#1D1D1D] space-y-2">
+                <div className="flex flex-wrap items-center gap-3 text-xs">
+                  <span className="font-mono text-amber-400">{d.view}</span>
+                  <span className="text-[#808080]">owner {d.owner || "none"}{d.built_at ? " · built " + String(d.built_at).slice(0, 10) : ""}</span>
+                  {d.rules && d.rules.active > 0 && <span className="text-[#A0A0A0]">{d.rules.active} rule(s) active</span>}
+                  <button onClick={() => onAsk(d.view)} className="underline text-amber-400 hover:text-amber-300">Ask about it</button>
+                  <button data-testid={"gold-edit-" + d.dataset} onClick={() => setOpen(open === d.dataset ? null : d.dataset)} className="underline text-amber-400 hover:text-amber-300">{d.can_edit ? "Edit mapping & rules" : "View mapping & rules"}</button>
+                </div>
+                {open === d.dataset && <MappingEditor key={d.dataset} dataset={d.dataset} api={api} onAsk={onAsk} onClose={() => setOpen(null)} onBuilt={() => load()} />}
+              </div>
+            ))}
+          </div>
+        );
+      }
+
       function OnboardingHub({ session, onAsk, onViewsChanged }) {
         const [items, setItems] = useState([]);
         const [over, setOver] = useState(false);
         const [pipe, setPipe] = useState({ busy: false, msg: "", err: null });
         const [jobs, setJobs] = useState([]);
+        const [viewsTick, setViewsTick] = useState(0);
         const seq = useRef(0);
         const itemsRef = useRef([]);
         itemsRef.current = items;
@@ -566,10 +825,7 @@
         const mergeJob = (j) => setJobs((p) => (p.some((x) => x.id === j.id) ? p.map((x) => (x.id === j.id ? j : x)) : [j, ...p]));
 
         const loadMapping = async (id, ds) => {
-          const pm = await api({ action: "profile_map", dataset: ds });
-          const edits = {};
-          pm.rows.forEach((r) => { edits[r.name] = (r.status === "auto" || r.status === "saved" || r.status === "duplicate") ? (r.target || "") : ""; });
-          setItems((p) => p.map((i) => (i.id === id ? { ...i, datasets: { ...i.datasets, [ds]: { rows: pm.rows, targets: pm.targets, edits, estimated: pm.estimated_rows, building: false, built: null, error: null } } } : i)));
+          setItems((p) => p.map((i) => (i.id === id ? { ...i, datasets: { ...i.datasets, [ds]: { open: true } } } : i)));
         };
 
         const runFile = async (id, file) => {
@@ -620,22 +876,6 @@
             setItems((p) => [{ id, name: file.name, size: file.size, stage: "upload", msg: "Queued", datasets: {}, order: [], error: null, done: false }, ...p]);
             runFile(id, file);
           });
-        };
-
-        const build = async (id, ds) => {
-          const it = itemsRef.current.find((i) => i.id === id);
-          const d = it.datasets[ds];
-          const mapping = {};
-          d.rows.forEach((r) => { if (r.status !== "skip") mapping[r.name] = (d.edits[r.name] || "").trim() || null; });
-          updDs(id, ds, { building: true, error: null });
-          try {
-            const res = await api({ action: "build_view", dataset: ds, mapping });
-            updDs(id, ds, { building: false, built: res });
-            upd(id, { stage: "gold", done: true, msg: "Gold view ready." });
-            onViewsChanged();
-          } catch (err) {
-            updDs(id, ds, { building: false, error: err });
-          }
         };
 
         const runPipeline = async () => {
@@ -715,6 +955,8 @@
               </div>
             )}
 
+            <GoldViews api={api} onAsk={onAsk} tick={viewsTick} />
+
             {items.map((it) => {
               const idx = STAGES.findIndex((s) => s[0] === it.stage);
               return (
@@ -734,77 +976,10 @@
                   <div className="text-xs text-[#C0C0C0]" data-testid="onb-msg">{it.msg}</div>
                   <ErrBox err={it.error} />
 
-                  {(it.order || []).map((ds) => {
-                    const d = it.datasets[ds];
-                    if (!d) return null;
-                    return (
-                      <div key={ds} className="border border-[#2D2D2D] rounded-lg p-4 space-y-3 bg-[#1D1D1D]" data-testid="onb-dataset">
-                        <div className="flex justify-between items-center">
-                          <div className="text-sm text-amber-400 font-mono">{ds}</div>
-                          <div className="text-[11px] text-[#808080]">about {d.estimated} rows · {d.rows.length} fields</div>
-                        </div>
-                        <div className="overflow-x-auto">
-                          <table className="w-full text-xs">
-                            <thead>
-                              <tr className="text-left text-[#808080]">
-                                <th className="py-1 pr-3">Source field</th><th className="pr-3">Type</th><th className="pr-3">Filled</th><th className="pr-3">Examples</th><th className="pr-3">Maps to</th><th>Match</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {d.rows.map((r) => (
-                                <tr key={r.name} className="border-t border-[#2A2A2A]">
-                                  <td className="py-1.5 pr-3 font-mono text-white">{r.name}</td>
-                                  <td className="pr-3 text-[#A0A0A0]">{r.kind}</td>
-                                  <td className="pr-3 text-[#A0A0A0]">{r.fill_pct}%</td>
-                                  <td className="pr-3 text-[#808080] max-w-[160px] truncate" title={r.samples.join(", ")}>{r.samples.join(", ")}</td>
-                                  <td className="pr-3">
-                                    {r.status === "skip" ? <span className="text-[#606060]">skipped</span> : r.status === "duplicate" ? (
-                                      <label className="flex items-center gap-2 text-[11px] text-[#C0C0C0]" title={r.reason}>
-                                        <input type="checkbox" aria-label={"Hide " + r.name} disabled={!!d.built} checked={d.edits[r.name] === "-"}
-                                          onChange={(e) => updDs(it.id, ds, { edits: { ...d.edits, [r.name]: e.target.checked ? "-" : "" } })} />
-                                        hide (same as {r.duplicate_of})
-                                      </label>
-                                    ) : (
-                                      <div>
-                                        <input
-                                          list={"targets-" + it.id}
-                                          aria-label={"Maps to for " + r.name}
-                                          value={d.edits[r.name] || ""}
-                                          disabled={!!d.built}
-                                          placeholder={r.name + " (keep)"}
-                                          onChange={(e) => updDs(it.id, ds, { edits: { ...d.edits, [r.name]: e.target.value } })}
-                                          className="w-44 bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-white font-mono focus:outline-none focus:border-amber-500 disabled:opacity-60"
-                                        />
-                                        {r.status === "review" && r.target && !d.built && (d.edits[r.name] || "") !== r.target && (
-                                          <button data-testid={"use-" + r.name} onClick={() => updDs(it.id, ds, { edits: { ...d.edits, [r.name]: r.target } })}
-                                            className="block mt-1 text-[10px] text-amber-400 hover:text-amber-300 underline">use suggestion "{r.target}"?</button>
-                                        )}
-                                      </div>
-                                    )}
-                                  </td>
-                                  <td>{badge(r.status)} {r.confidence > 0 && <span className="text-[10px] text-[#707070]">{Math.round(r.confidence * 100)}%</span>}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                          <datalist id={"targets-" + it.id}>{d.targets.map((t) => <option key={t} value={t} />)}</datalist>
-                        </div>
-                        <p className="text-[11px] text-[#707070]">Leave "Maps to" empty to keep the field's own name. Only confident matches are filled in for you; uncertain ones show a "use suggestion" link. Names must be lowercase letters, digits and underscores.</p>
-                        <ErrBox err={d.error} />
-                        {d.built ? (
-                          <div className="flex flex-wrap items-center gap-3 text-xs" data-testid="onb-built">
-                            <span className="text-green-300">✓ Built <span className="font-mono">{d.built.view}</span> ({d.built.rows == null ? "?" : d.built.rows} rows, {d.built.mapped} fields renamed{d.built.hidden ? ", " + d.built.hidden + " hidden" : ""})</span>
-                            <button data-testid="edit-mapping" onClick={() => updDs(it.id, ds, { built: null })} className="border border-[#3D3D3D] hover:border-amber-500 text-white px-3 py-1.5 rounded-lg">Edit mapping</button>
-                            <button onClick={() => onAsk(d.built.view)} className="bg-amber-600 hover:bg-amber-500 text-white font-bold px-3 py-1.5 rounded-lg">Ask about this dataset</button>
-                          </div>
-                        ) : (
-                          <button onClick={() => build(it.id, ds)} disabled={d.building} data-testid="onb-build" className="bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-bold text-sm px-4 py-2 rounded-lg">
-                            {d.building ? "Building Gold view..." : "Approve mapping & build Gold view"}
-                          </button>
-                        )}
-                      </div>
-                    );
-                  })}
+                  {(it.order || []).map((ds) => it.datasets[ds] ? (
+                    <MappingEditor key={ds} dataset={ds} api={api} onAsk={onAsk}
+                      onBuilt={() => { upd(it.id, { stage: "gold", done: true, msg: "Gold view ready." }); onViewsChanged(); setViewsTick((n) => n + 1); }} />
+                  ) : null)}
                 </div>
               );
             })}
@@ -816,6 +991,37 @@
       // ------------------------------------------------------------------
       // Governance: users and per-client policy (admins only; the server enforces everything)
       // ------------------------------------------------------------------
+      function UnassignedPanel({ api, tenants }) {
+        const [rows, setRows] = useState(null);
+        const [to, setTo] = useState({});
+        const [msg, setMsg] = useState("");
+        const [err, setErr] = useState(null);
+        const load = async () => { try { const r = await api({ action: "unassigned" }); setRows(r.datasets || []); } catch (e) { setErr(e); } };
+        useEffect(() => { load(); }, []);
+        const move = async (ds) => {
+          setErr(null); setMsg("");
+          try { const r = await api({ action: "dataset_move", dataset: ds, to_tenant: (to[ds] || "").trim() }); setMsg(r.note); } catch (e) { setErr(e); }
+        };
+        if (!rows && !err) return null;
+        return (
+          <div data-testid="unassigned-panel" className="bg-[#222222] border border-[#2D2D2D] rounded-xl p-5 shadow space-y-3">
+            <h3 className="text-sm font-bold text-white">Unassigned data</h3>
+            <p className="text-[11px] text-[#808080]">Files dropped without a client land under UNASSIGNED_NEW_CLIENT. Pick the right client and SAMM copies the data across. The original is kept.</p>
+            <ErrBox err={err} />
+            {rows && rows.length === 0 && <div className="text-xs text-[#808080]">Nothing is waiting.</div>}
+            {(rows || []).map((d) => (
+              <div key={d.dataset} className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="font-mono text-amber-400">{d.dataset}</span>
+                <input aria-label={"Move " + d.dataset + " to client"} list="unassigned-tenants" value={to[d.dataset] || ""} onChange={(e) => setTo({ ...to, [d.dataset]: e.target.value })} placeholder="client id" className="bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-white font-mono w-40" />
+                <button aria-label={"Move " + d.dataset} onClick={() => move(d.dataset)} className="border border-[#3D3D3D] hover:border-amber-500 text-white px-3 py-1 rounded-md">Move</button>
+              </div>
+            ))}
+            <datalist id="unassigned-tenants">{(tenants || []).map((t) => <option key={t} value={t} />)}</datalist>
+            {msg && <div data-testid="move-note" className="text-xs text-green-300">{msg}</div>}
+          </div>
+        );
+      }
+
       function GovernanceHub({ session, identity }) {
         const api = (payload) => callBackend(session.url, session.token, payload);
         const [data, setData] = useState(null);
@@ -838,7 +1044,7 @@
           try {
             const r = await api({ action: "policy_get", tenant_id: t });
             const p = r.policy || {};
-            setPol({ restricted: (p.restricted_columns || []).join(", "), caps: { ...(p.row_caps || {}) }, scan: p.scan_limit_gb == null ? "" : String(p.scan_limit_gb), auto: p.auto_approve_confidence == null ? "" : String(Math.round(p.auto_approve_confidence * 100)), meta: r });
+            setPol({ restricted: (p.restricted_columns || []).join(", "), caps: { ...(p.row_caps || {}) }, scan: p.scan_limit_gb == null ? "" : String(p.scan_limit_gb), auto: p.auto_approve_confidence == null ? "" : String(Math.round(p.auto_approve_confidence * 100)), mode: p.mapping_mode || "", meta: r });
             setPolMsg("");
           } catch (e) { fail(e); }
         };
@@ -869,7 +1075,7 @@
           try {
             const caps = {};
             Object.keys(pol.caps).forEach((r) => { if (pol.caps[r] !== "" && pol.caps[r] != null) caps[r] = Number(pol.caps[r]); });
-            await api({ action: "policy_save", tenant_id: policyTenant, policy: { restricted_columns: pol.restricted, row_caps: caps, scan_limit_gb: pol.scan === "" ? null : Number(pol.scan), auto_approve_confidence: pol.auto === "" ? null : Number(pol.auto) } });
+            await api({ action: "policy_save", tenant_id: policyTenant, policy: { restricted_columns: pol.restricted, row_caps: caps, scan_limit_gb: pol.scan === "" ? null : Number(pol.scan), auto_approve_confidence: pol.auto === "" ? null : Number(pol.auto), mapping_mode: pol.mode || null } });
             setPolMsg("Saved. It applies to the next request.");
           } catch (e) { fail(e); } finally { setBusy(false); }
         };
@@ -981,6 +1187,14 @@
                     <input aria-label="Scan limit" type="number" step="0.01" value={pol.scan} onChange={(e) => setPol({ ...pol, scan: e.target.value })} className={inp} placeholder={"platform " + pol.meta.platform_scan_limit_gb} />
                     <span className="text-[10px] text-[#707070]">Can only be lower than the platform limit ({pol.meta.platform_scan_limit_gb} GB). A lower limit is checked after the query; the platform limit is the hard stop.</span>
                   </label>
+                  <label className="flex flex-col gap-1 text-[#A0A0A0] max-w-xs">How new files are mapped
+                    <select aria-label="Mapping mode" value={pol.mode} onChange={(e) => setPol({ ...pol, mode: e.target.value })} className={inp}>
+                      <option value="">Review first (default)</option>
+                      <option value="review">Review first</option>
+                      <option value="auto">Auto: build straight away</option>
+                    </select>
+                    <span className="text-[10px] text-[#707070]">Review first: SAMM suggests the mapping and rules, and an engineer approves before the Gold view is built. Auto: SAMM builds at once using only technical rules; business rules still wait for approval.</span>
+                  </label>
                   <label className="flex flex-col gap-1 text-[#A0A0A0] max-w-xs">Auto-approve field mappings at or above (%)
                     <input aria-label="Auto-approve level" type="number" min="50" max="100" value={pol.auto} onChange={(e) => setPol({ ...pol, auto: e.target.value })} className={inp} placeholder="90 (default)" />
                     <span className="text-[10px] text-[#707070]">When a file arrives, SAMM maps fields it is at least this sure about on its own. Anything lower waits for a Data Engineer. Fields a person approved before are reused.</span>
@@ -992,6 +1206,7 @@
                 </div>
               )}
             </div>
+            {isSys && <UnassignedPanel api={api} tenants={tenants} />}
           </div>
         );
       }
