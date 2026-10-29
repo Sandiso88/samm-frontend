@@ -34,14 +34,22 @@
 
       // Roles are DISPLAY labels only. Real permissions are enforced by the backend from your token.
       const ROLE_LABELS = {
-        viewer: "Viewer (Cap: 100 Rows)",
-        analyst: "Analyst (BI View Controls)",
-        engineer: "Engineer (Ingestion Access)",
-        admin: "Administrator (Full Access)",
+        viewer: "Viewer",
+        analyst: "Data Analyst",
+        engineer: "Data Engineer",
+        admin: "Client Administrator",
+        system_admin: "System Administrator",
       };
-      const ROLE_ROW_CAP = { viewer: 100, analyst: 500, engineer: 1000, admin: 1000 };
-      const CAN_ONBOARD = ["engineer", "admin"];
-      const CAN_GOVERN = ["admin"];
+      const ROLE_HELP = {
+        viewer: "Asks questions. Small row cap.",
+        analyst: "Larger row cap. Power BI DAX and Sisense output.",
+        engineer: "Uploads files, runs the pipeline, maps fields, builds Gold views.",
+        admin: "Manages the users and policies of their own client.",
+        system_admin: "Platform owner. Every client, every role.",
+      };
+      const ROLE_ROW_CAP = { viewer: 100, analyst: 500, engineer: 1000, admin: 1000, system_admin: 1000 };
+      const CAN_ONBOARD = ["engineer", "admin", "system_admin"];
+      const CAN_GOVERN = ["admin", "system_admin"];
       const PERSONAS = [
         { value: "architect", label: "Architect" },
         { value: "guard", label: "Guard" },
@@ -460,7 +468,7 @@
         const loadMapping = async (id, ds) => {
           const pm = await api({ action: "profile_map", dataset: ds });
           const edits = {};
-          pm.rows.forEach((r) => { edits[r.name] = r.target || ""; });
+          pm.rows.forEach((r) => { edits[r.name] = (r.status === "auto" || r.status === "saved" || r.status === "duplicate") ? (r.target || "") : ""; });
           setItems((p) => p.map((i) => (i.id === id ? { ...i, datasets: { ...i.datasets, [ds]: { rows: pm.rows, targets: pm.targets, edits, estimated: pm.estimated_rows, building: false, built: null, error: null } } } : i)));
         };
 
@@ -535,27 +543,27 @@
           }
         };
 
-        const checkNew = async () => {
+        const checkNew = async (all) => {
           setPipe({ busy: true, msg: "", err: null });
           try {
             const r = await api({ action: "datasets" });
-            const fresh = r.datasets.filter((d) => !d.view);
+            const fresh = all === true ? r.datasets : r.datasets.filter((d) => !d.view);
             if (fresh.length === 0) {
-              setPipe({ busy: false, msg: "No datasets are waiting for a Gold view.", err: null });
+              setPipe({ busy: false, msg: all === true ? "No datasets found yet." : "No datasets are waiting for a Gold view.", err: null });
               return;
             }
             const id = "f" + ++seq.current;
             const order = fresh.map((d) => d.dataset);
-            setItems((p) => [{ id, name: "Datasets already in Silver", size: 0, stage: "map", msg: "Review the suggested mapping, then build the Gold view.", datasets: {}, order, error: null, done: false }, ...p]);
+            setItems((p) => [{ id, name: "Datasets already in Silver", size: 0, stage: "map", msg: "Review the mapping, then build (or rebuild) the Gold view.", datasets: {}, order, error: null, done: false }, ...p]);
             for (const ds of order) await loadMapping(id, ds);
-            setPipe({ busy: false, msg: order.length + " dataset(s) found without a Gold view.", err: null });
+            setPipe({ busy: false, msg: order.length + (all === true ? " dataset(s) loaded." : " dataset(s) found without a Gold view."), err: null });
           } catch (err) {
             setPipe({ busy: false, msg: "", err });
           }
         };
 
         const badge = (st) => {
-          const c = { auto: "bg-green-900 text-green-200", review: "bg-amber-900 text-amber-200", saved: "bg-blue-900 text-blue-200", new: "bg-[#333] text-[#BBB]", skip: "bg-[#333] text-[#777]" }[st] || "bg-[#333] text-[#BBB]";
+          const c = { auto: "bg-green-900 text-green-200", review: "bg-amber-900 text-amber-200", saved: "bg-blue-900 text-blue-200", new: "bg-[#333] text-[#BBB]", duplicate: "bg-[#333] text-[#BBB]", skip: "bg-[#333] text-[#777]" }[st] || "bg-[#333] text-[#BBB]";
           return <span className={"px-2 py-0.5 rounded text-[10px] font-mono " + c}>{st}</span>;
         };
 
@@ -579,7 +587,8 @@
               </label>
               <div className="flex flex-wrap items-center gap-3">
                 <button onClick={runPipeline} disabled={pipe.busy} className="border border-[#3D3D3D] hover:border-amber-500 text-xs text-white px-3 py-2 rounded-lg disabled:opacity-50">▶ Run pipeline now</button>
-                <button onClick={checkNew} disabled={pipe.busy} className="border border-[#3D3D3D] hover:border-amber-500 text-xs text-white px-3 py-2 rounded-lg disabled:opacity-50">🔎 Check for new datasets</button>
+                <button onClick={() => checkNew(false)} disabled={pipe.busy} className="border border-[#3D3D3D] hover:border-amber-500 text-xs text-white px-3 py-2 rounded-lg disabled:opacity-50">🔎 Check for new datasets</button>
+                <button onClick={() => checkNew(true)} disabled={pipe.busy} data-testid="review-all" className="border border-[#3D3D3D] hover:border-amber-500 text-xs text-white px-3 py-2 rounded-lg disabled:opacity-50">✏️ Review existing mappings</button>
                 <span className="text-[11px] text-[#808080]">Run pipeline = convert files already in Bronze with your orchestrator.</span>
               </div>
               {pipe.msg && <div className="text-xs text-green-300">{pipe.msg}</div>}
@@ -628,16 +637,28 @@
                                   <td className="pr-3 text-[#A0A0A0]">{r.fill_pct}%</td>
                                   <td className="pr-3 text-[#808080] max-w-[160px] truncate" title={r.samples.join(", ")}>{r.samples.join(", ")}</td>
                                   <td className="pr-3">
-                                    {r.status === "skip" ? <span className="text-[#606060]">skipped</span> : (
-                                      <input
-                                        list={"targets-" + it.id}
-                                        aria-label={"Maps to for " + r.name}
-                                        value={d.edits[r.name] || ""}
-                                        disabled={!!d.built}
-                                        placeholder={r.name + " (keep)"}
-                                        onChange={(e) => updDs(it.id, ds, { edits: { ...d.edits, [r.name]: e.target.value } })}
-                                        className="w-44 bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-white font-mono focus:outline-none focus:border-amber-500 disabled:opacity-60"
-                                      />
+                                    {r.status === "skip" ? <span className="text-[#606060]">skipped</span> : r.status === "duplicate" ? (
+                                      <label className="flex items-center gap-2 text-[11px] text-[#C0C0C0]" title={r.reason}>
+                                        <input type="checkbox" aria-label={"Hide " + r.name} disabled={!!d.built} checked={d.edits[r.name] === "-"}
+                                          onChange={(e) => updDs(it.id, ds, { edits: { ...d.edits, [r.name]: e.target.checked ? "-" : "" } })} />
+                                        hide (same as {r.duplicate_of})
+                                      </label>
+                                    ) : (
+                                      <div>
+                                        <input
+                                          list={"targets-" + it.id}
+                                          aria-label={"Maps to for " + r.name}
+                                          value={d.edits[r.name] || ""}
+                                          disabled={!!d.built}
+                                          placeholder={r.name + " (keep)"}
+                                          onChange={(e) => updDs(it.id, ds, { edits: { ...d.edits, [r.name]: e.target.value } })}
+                                          className="w-44 bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-white font-mono focus:outline-none focus:border-amber-500 disabled:opacity-60"
+                                        />
+                                        {r.status === "review" && r.target && !d.built && (d.edits[r.name] || "") !== r.target && (
+                                          <button data-testid={"use-" + r.name} onClick={() => updDs(it.id, ds, { edits: { ...d.edits, [r.name]: r.target } })}
+                                            className="block mt-1 text-[10px] text-amber-400 hover:text-amber-300 underline">use suggestion "{r.target}"?</button>
+                                        )}
+                                      </div>
                                     )}
                                   </td>
                                   <td>{badge(r.status)} {r.confidence > 0 && <span className="text-[10px] text-[#707070]">{Math.round(r.confidence * 100)}%</span>}</td>
@@ -647,11 +668,12 @@
                           </table>
                           <datalist id={"targets-" + it.id}>{d.targets.map((t) => <option key={t} value={t} />)}</datalist>
                         </div>
-                        <p className="text-[11px] text-[#707070]">Leave "Maps to" empty to keep the field's own name. Names must be lowercase letters, digits and underscores.</p>
+                        <p className="text-[11px] text-[#707070]">Leave "Maps to" empty to keep the field's own name. Only confident matches are filled in for you; uncertain ones show a "use suggestion" link. Names must be lowercase letters, digits and underscores.</p>
                         <ErrBox err={d.error} />
                         {d.built ? (
                           <div className="flex flex-wrap items-center gap-3 text-xs" data-testid="onb-built">
-                            <span className="text-green-300">✓ Built <span className="font-mono">{d.built.view}</span> ({d.built.rows == null ? "?" : d.built.rows} rows, {d.built.mapped} fields mapped)</span>
+                            <span className="text-green-300">✓ Built <span className="font-mono">{d.built.view}</span> ({d.built.rows == null ? "?" : d.built.rows} rows, {d.built.mapped} fields renamed{d.built.hidden ? ", " + d.built.hidden + " hidden" : ""})</span>
+                            <button data-testid="edit-mapping" onClick={() => updDs(it.id, ds, { built: null })} className="border border-[#3D3D3D] hover:border-amber-500 text-white px-3 py-1.5 rounded-lg">Edit mapping</button>
                             <button onClick={() => onAsk(d.built.view)} className="bg-amber-600 hover:bg-amber-500 text-white font-bold px-3 py-1.5 rounded-lg">Ask about this dataset</button>
                           </div>
                         ) : (
@@ -668,6 +690,187 @@
           </div>
         );
       }
+
+
+      // ------------------------------------------------------------------
+      // Governance: users and per-client policy (admins only; the server enforces everything)
+      // ------------------------------------------------------------------
+      function GovernanceHub({ session, identity }) {
+        const api = (payload) => callBackend(session.url, session.token, payload);
+        const [data, setData] = useState(null);
+        const [err, setErr] = useState("");
+        const [busy, setBusy] = useState(false);
+        const [issued, setIssued] = useState(null);
+        const [copied, setCopied] = useState(false);
+        const [form, setForm] = useState({ email: "", role: "viewer", tenant_id: "", expires_days: "" });
+        const [tenants, setTenants] = useState([]);
+        const [policyTenant, setPolicyTenant] = useState(identity.tenant_id);
+        const [pol, setPol] = useState(null);
+        const [polMsg, setPolMsg] = useState("");
+        const isSys = identity.role === "system_admin";
+
+        const fail = (e) => setErr((e && e.message) || "Something went wrong.");
+        const loadUsers = async () => {
+          try { setData(await api({ action: "users" })); setErr(""); } catch (e) { fail(e); }
+        };
+        const loadPolicy = async (t) => {
+          try {
+            const r = await api({ action: "policy_get", tenant_id: t });
+            const p = r.policy || {};
+            setPol({ restricted: (p.restricted_columns || []).join(", "), caps: { ...(p.row_caps || {}) }, scan: p.scan_limit_gb == null ? "" : String(p.scan_limit_gb), meta: r });
+            setPolMsg("");
+          } catch (e) { fail(e); }
+        };
+        useEffect(() => { loadUsers(); if (isSys) api({ action: "tenants" }).then((r) => setTenants(r.tenants || [])).catch(() => {}); }, []);
+        useEffect(() => { loadPolicy(policyTenant); }, [policyTenant]);
+
+        const save = async (payload) => {
+          setBusy(true); setErr("");
+          try {
+            const r = await api({ action: "user_save", ...payload });
+            if (r.token) { setIssued({ email: r.user.email, token: r.token }); setCopied(false); }
+            await loadUsers();
+            return true;
+          } catch (e) { fail(e); return false; } finally { setBusy(false); }
+        };
+        const addUser = async (e) => {
+          e.preventDefault();
+          const payload = { email: form.email, role: form.role };
+          if (isSys && form.tenant_id) payload.tenant_id = form.tenant_id;
+          if (form.expires_days) payload.expires_days = Number(form.expires_days);
+          if (await save(payload)) setForm({ ...form, email: "", expires_days: "" });
+        };
+        const copy = async () => {
+          try { await navigator.clipboard.writeText(issued.token); setCopied(true); } catch (_) { setCopied(false); }
+        };
+        const savePolicy = async () => {
+          setBusy(true); setPolMsg(""); setErr("");
+          try {
+            const caps = {};
+            Object.keys(pol.caps).forEach((r) => { if (pol.caps[r] !== "" && pol.caps[r] != null) caps[r] = Number(pol.caps[r]); });
+            await api({ action: "policy_save", tenant_id: policyTenant, policy: { restricted_columns: pol.restricted, row_caps: caps, scan_limit_gb: pol.scan === "" ? null : Number(pol.scan) } });
+            setPolMsg("Saved. It applies to the next request.");
+          } catch (e) { fail(e); } finally { setBusy(false); }
+        };
+
+        const inp = "bg-[#151515] border border-[#3D3D3D] rounded-md px-2 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-amber-500";
+        const btn = "px-3 py-1.5 rounded-md text-xs font-semibold bg-amber-500 text-black hover:bg-amber-400 disabled:opacity-50";
+        const link = "text-xs underline text-[#A0A0A0] hover:text-white";
+        const roles = (data && data.assignable_roles) || [];
+        const rows = (data && data.users) || [];
+        const boot = (data && data.bootstrap) || [];
+
+        return (
+          <div data-testid="governance-hub" className="max-w-3xl mx-auto space-y-5">
+            <div className="bg-[#222222] border border-[#2D2D2D] rounded-xl p-6 shadow-xl space-y-3">
+              <h2 className="text-lg font-bold text-white">🛡️ Governance</h2>
+              <p className="text-xs text-[#A0A0A0] leading-relaxed">
+                {isSys ? "You manage every client." : "You manage the users and policy of client " + identity.tenant_id + "."} Tokens are shown once and only a hash is stored. The server checks your role on every call.
+              </p>
+              {err && <div data-testid="gov-error" className="text-xs text-red-300 bg-red-900/20 border border-red-800 rounded-md p-2">{err}</div>}
+              {issued && (
+                <div data-testid="issued-token" className="text-xs bg-amber-500/10 border border-amber-600 rounded-md p-3 space-y-2">
+                  <div className="text-amber-300 font-semibold">New access token for {issued.email}. It is shown only once.</div>
+                  <div className="font-mono break-all text-white bg-[#151515] rounded p-2 select-all">{issued.token}</div>
+                  <div className="flex gap-3 items-center">
+                    <button onClick={copy} className={btn}>{copied ? "Copied" : "Copy token"}</button>
+                    <button onClick={() => setIssued(null)} className={link}>I have saved it, hide</button>
+                  </div>
+                  <div className="text-[#A0A0A0]">Send it to the user privately. They paste it on the sign-in screen.</div>
+                </div>
+              )}
+            </div>
+
+            <div className="bg-[#222222] border border-[#2D2D2D] rounded-xl p-6 shadow-xl space-y-3">
+              <h3 className="text-sm font-bold text-white">Add a user</h3>
+              <form onSubmit={addUser} className="flex flex-wrap gap-2 items-end">
+                <label className="text-[10px] text-[#A0A0A0] flex flex-col gap-1">E-mail
+                  <input aria-label="User e-mail" required value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} className={inp + " w-56"} placeholder="name@company.com" />
+                </label>
+                <label className="text-[10px] text-[#A0A0A0] flex flex-col gap-1">Role
+                  <select aria-label="User role" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })} className={inp}>
+                    {roles.map((r) => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
+                  </select>
+                </label>
+                {isSys && (
+                  <label className="text-[10px] text-[#A0A0A0] flex flex-col gap-1">Client
+                    <input aria-label="User client" list="gov-tenants" value={form.tenant_id} onChange={(e) => setForm({ ...form, tenant_id: e.target.value })} className={inp + " w-32"} placeholder={identity.tenant_id} />
+                    <datalist id="gov-tenants">{tenants.map((t) => <option key={t} value={t} />)}</datalist>
+                  </label>
+                )}
+                <label className="text-[10px] text-[#A0A0A0] flex flex-col gap-1">Expires (days)
+                  <input aria-label="Expiry days" type="number" min="1" max="730" value={form.expires_days} onChange={(e) => setForm({ ...form, expires_days: e.target.value })} className={inp + " w-24"} placeholder="never" />
+                </label>
+                <button type="submit" disabled={busy} className={btn}>Create user</button>
+              </form>
+              <p className="text-[10px] text-[#707070]">{ROLE_HELP[form.role]}</p>
+            </div>
+
+            <div className="bg-[#222222] border border-[#2D2D2D] rounded-xl p-6 shadow-xl space-y-3">
+              <h3 className="text-sm font-bold text-white">Users ({rows.length})</h3>
+              {!data && !err && <div className="text-xs text-[#A0A0A0]">Loading...</div>}
+              <div className="space-y-2">
+                {rows.map((u) => (
+                  <div key={u.email + u.tenant_id} data-testid="user-row" className="bg-[#151515] border border-[#2D2D2D] rounded-md p-3 flex flex-wrap gap-2 items-center text-xs font-mono">
+                    <div className="flex-1 min-w-[12rem]">
+                      <div className="text-white truncate">{u.email}</div>
+                      <div className="text-[#707070]">{u.tenant_id}{u.expires_at ? " | expires " + u.expires_at.slice(0, 10) : ""}{u.status === "disabled" ? " | DISABLED" : ""}</div>
+                    </div>
+                    <select aria-label={"Role for " + u.email} value={u.role} disabled={busy || u.email === identity.email || !roles.includes(u.role)} onChange={(e) => save({ email: u.email, tenant_id: u.tenant_id, role: e.target.value })} className={inp}>
+                      {ROLES_ORDER.map((r) => <option key={r} value={r} disabled={!roles.includes(r)}>{ROLE_LABELS[r]}</option>)}
+                    </select>
+                    <button disabled={busy || u.email === identity.email} onClick={() => save({ email: u.email, tenant_id: u.tenant_id, status: u.status === "disabled" ? "active" : "disabled" })} className={link}>{u.status === "disabled" ? "Enable" : "Disable"}</button>
+                    <button disabled={busy} onClick={() => { if (window.confirm("Issue a new token for " + u.email + "? The old token stops working.")) save({ email: u.email, tenant_id: u.tenant_id, reset_token: true, expires_days: u.expires_at ? 90 : undefined }); }} className={link}>Reset token</button>
+                  </div>
+                ))}
+                {data && rows.length === 0 && <div className="text-xs text-[#A0A0A0]">No managed users yet. Create the first one above.</div>}
+              </div>
+              {boot.length > 0 && (
+                <div className="pt-2 border-t border-[#2D2D2D]">
+                  <div className="text-[10px] text-[#707070] mb-1">Break-glass tokens (set in the Lambda environment, not editable here)</div>
+                  {boot.map((b, i) => <div key={i} className="text-xs font-mono text-[#A0A0A0]">{b.email} | {ROLE_LABELS[b.role] || b.role} | {b.tenant_id}</div>)}
+                </div>
+              )}
+            </div>
+
+            <div className="bg-[#222222] border border-[#2D2D2D] rounded-xl p-6 shadow-xl space-y-3">
+              <div className="flex items-center gap-3">
+                <h3 className="text-sm font-bold text-white">Client policy</h3>
+                {isSys && (
+                  <>
+                    <input aria-label="Policy client" list="gov-tenants" value={policyTenant} onChange={(e) => setPolicyTenant(e.target.value)} className={inp + " w-36"} />
+                  </>
+                )}
+                {!isSys && <span className="text-xs font-mono text-[#A0A0A0]">{policyTenant}</span>}
+              </div>
+              {pol && (
+                <div className="space-y-3 text-xs">
+                  <label className="flex flex-col gap-1 text-[#A0A0A0]">Hidden columns (comma separated, hidden from Viewer and Data Analyst)
+                    <input aria-label="Restricted columns" value={pol.restricted} onChange={(e) => setPol({ ...pol, restricted: e.target.value })} className={inp} placeholder="salary, id_number" />
+                    {pol.meta.platform_restricted.length > 0 && <span className="text-[10px] text-[#707070]">Always hidden platform-wide: {pol.meta.platform_restricted.join(", ")}</span>}
+                  </label>
+                  <div className="grid grid-cols-5 gap-2">
+                    {ROLES_ORDER.map((r) => (
+                      <label key={r} className="flex flex-col gap-1 text-[10px] text-[#A0A0A0]">{ROLE_LABELS[r]} rows
+                        <input aria-label={"Row cap " + r} type="number" min="1" max={pol.meta.hard_max_rows} value={pol.caps[r] == null ? "" : pol.caps[r]} onChange={(e) => setPol({ ...pol, caps: { ...pol.caps, [r]: e.target.value } })} className={inp} placeholder={String(pol.meta.default_row_caps[r])} />
+                      </label>
+                    ))}
+                  </div>
+                  <label className="flex flex-col gap-1 text-[#A0A0A0] max-w-xs">Scan limit per question (GB)
+                    <input aria-label="Scan limit" type="number" step="0.01" value={pol.scan} onChange={(e) => setPol({ ...pol, scan: e.target.value })} className={inp} placeholder={"platform " + pol.meta.platform_scan_limit_gb} />
+                    <span className="text-[10px] text-[#707070]">Can only be lower than the platform limit ({pol.meta.platform_scan_limit_gb} GB). A lower limit is checked after the query; the platform limit is the hard stop.</span>
+                  </label>
+                  <div className="flex items-center gap-3">
+                    <button onClick={savePolicy} disabled={busy} className={btn}>Save policy</button>
+                    {polMsg && <span data-testid="policy-saved" className="text-green-400">{polMsg}</span>}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      }
+      const ROLES_ORDER = ["viewer", "analyst", "engineer", "admin", "system_admin"];
 
       // ------------------------------------------------------------------
       // Main app
@@ -752,9 +955,12 @@
           return { inline: created, sqlArt };
         };
 
-        const handleSendMessage = async (e) => {
+        const handleSendMessage = (e) => {
           e.preventDefault();
-          const userText = input.trim();
+          return sendText(input.trim());
+        };
+
+        const sendText = async (userText) => {
           if (!userText || isLoading) return;
           addMessage({ role: "user", text: userText });
           setInput("");
@@ -769,6 +975,7 @@
               d = await callBackend(session.url, session.token, { action: "query", prompt: userText, previous: (() => { const u = messages.filter((x) => x.role === "user"); return u.length ? String(u[u.length - 1].text).slice(0, 500) : undefined; })(), persona, view: activeView && activeView !== defaultView ? activeView : undefined });
             }
             const msgId = "r" + ++nextId.current;
+            if (d.routed_view && d.view) setActiveView(d.view);   // the question named a dataset: stay on it for follow-ups
             const { inline, sqlArt } = registerArtifacts(msgId, d.report_markdown, d.executed_sql);
             setMessages((prev) => [
               ...prev,
@@ -780,6 +987,7 @@
                 artifacts: inline,
                 sqlArtifact: sqlArt,
                 meta: { role: d.role, tenant: d.tenant_id, cap: d.row_cap, truncated: d.truncated, finops: d.finops },
+                suggestions: Array.isArray(d.suggestions) ? d.suggestions.slice(0, 5) : [],
                 simulated: demo,
                 timestamp: stamp(),
               },
@@ -850,7 +1058,7 @@
                   <button
                     onClick={() => canOnboard && setActiveTab("onboarding")}
                     disabled={!canOnboard}
-                    title={canOnboard ? "" : "Requires Engineer or Administrator"}
+                    title={canOnboard ? "" : "Requires Data Engineer or above"}
                     className={navClass("onboarding", !canOnboard)}
                   >
                     <span>📦 Data Onboarding</span>
@@ -858,7 +1066,7 @@
                   <button
                     onClick={() => canGovern && setActiveTab("governance")}
                     disabled={!canGovern}
-                    title={canGovern ? "" : "Requires Administrator"}
+                    title={canGovern ? "" : "Requires a Client or System Administrator"}
                     className={navClass("governance", !canGovern)}
                   >
                     <span>🛡️ Governance</span>
@@ -883,7 +1091,7 @@
                   <div className="text-xs font-mono space-y-1">
                     <div data-testid="who-role" className="text-white">{ROLE_LABELS[identity.role] || identity.role}</div>
                     <div className="text-[#A0A0A0] truncate" title={identity.email}>{identity.email}</div>
-                    <div className="text-[#A0A0A0] truncate" title={identity.tenant_id}>Tenant: {identity.tenant_id}</div>
+                    <div className="text-[#A0A0A0] truncate" title={identity.tenant_id}>{identity.all_clients ? "All clients (home: " + identity.tenant_id + ")" : "Client: " + identity.tenant_id}</div>
                     <button onClick={onSignOut} className="mt-2 text-[#A0A0A0] hover:text-white underline">Sign out</button>
                   </div>
                 )}
@@ -950,6 +1158,14 @@
                             </button>
                           )}
                           <ResultTable rows={msg.rows} />
+                          {msg.suggestions && msg.suggestions.length > 0 && msg === messages[messages.length - 1] && (
+                            <div className="flex flex-wrap gap-2 mt-3" data-testid="suggestions">
+                              {msg.suggestions.map((sg) => (
+                                <button key={sg} data-testid="suggestion" disabled={isLoading} onClick={() => sendText(sg)}
+                                  className="text-xs border border-[#3D3D3D] hover:border-amber-500 text-[#D0D0D0] px-3 py-1.5 rounded-full disabled:opacity-50">{sg}</button>
+                              ))}
+                            </div>
+                          )}
                           {msg.meta && (
                             <div className="text-[10px] text-[#707070] mt-2 font-mono">
                               role {msg.meta.role} · tenant {msg.meta.tenant} · row cap {msg.meta.cap}{msg.meta.truncated ? " · results truncated at the cap" : ""}
@@ -1022,24 +1238,14 @@
                 )}
 
                 {activeTab === "governance" && (
-                  <div className="max-w-2xl mx-auto bg-[#222222] border border-[#2D2D2D] rounded-xl p-6 shadow-xl space-y-4">
-                    <div className="border-b border-[#2D2D2D] pb-4">
+                  demo ? (
+                    <div className="max-w-2xl mx-auto bg-[#222222] border border-[#2D2D2D] rounded-xl p-6 shadow-xl space-y-3">
                       <h2 className="text-lg font-bold text-white">🛡️ Governance</h2>
-                      <div className="mt-2"><SimBadge>Simulated: user management not connected</SimBadge></div>
+                      <SimBadge>Demo mode: sign in with an administrator token to manage users and policy</SimBadge>
                     </div>
-                    <div className="text-sm space-y-2">
-                      <div className="text-[#A0A0A0] text-xs font-mono">Your verified identity</div>
-                      <div className="font-mono text-xs bg-[#151515] border border-[#2D2D2D] rounded-md p-3 space-y-1">
-                        <div>email: {identity.email}</div>
-                        <div>role: {identity.role}</div>
-                        <div>tenant: {identity.tenant_id}</div>
-                        <div>row cap: {identity.row_cap || ROLE_ROW_CAP[identity.role]}</div>
-                      </div>
-                      <p className="text-xs text-[#A0A0A0] leading-relaxed">
-                        Adding or removing users currently means editing the SAMM_TOKEN_REGISTRY environment variable on the Lambda. A managed user screen needs a user store (for example Cognito) and is not built yet.
-                      </p>
-                    </div>
-                  </div>
+                  ) : (
+                    <GovernanceHub session={session} identity={identity} />
+                  )
                 )}
               </div>
 
