@@ -453,10 +453,104 @@
         );
       }
 
+
+      // ------------------------------------------------------------------
+      // One onboarding job: the back end does the work, this card only shows progress and asks for approvals
+      // ------------------------------------------------------------------
+      const JOB_STATUS = {
+        queued: "Starting...", running: "SAMM is working on it...", waiting: "Waiting for the Excel conversion to finish...",
+        needs_approval: "Needs your confirmation", done: "Done", failed: "Stopped with an error",
+      };
+      function JobCard({ job, api, onUpdate, onAsk, onViewsChanged }) {
+        const live = ["queued", "running", "waiting"].includes(job.status);
+        const [busy, setBusy] = useState(false);
+        const [err, setErr] = useState(null);
+        const [choice, setChoice] = useState({});
+        const notified = useRef(false);
+        useEffect(() => {
+          if (!live) return undefined;
+          let stop = false;
+          const t = setInterval(async () => {
+            try { const r = await api({ action: "job_get", id: job.id }); if (!stop && r.job) onUpdate(r.job); } catch (e) { if (!stop) setErr(e); }
+          }, 3000);
+          return () => { stop = true; clearInterval(t); };
+        }, [job.id, live]);
+        useEffect(() => { if (job.status === "done" && !notified.current) { notified.current = true; onViewsChanged(); } }, [job.status]);
+
+        const waiting = Object.entries(job.datasets || {}).filter(([, d]) => d.state === "approval");
+        const act = async (payload) => {
+          setBusy(true); setErr(null);
+          try { const r = await api(payload); if (r.job) onUpdate(r.job); } catch (e) { setErr(e); } finally { setBusy(false); }
+        };
+        const approve = () => {
+          const decisions = {};
+          waiting.forEach(([ds, d]) => {
+            decisions[ds] = {};
+            d.queue.forEach((q) => {
+              const v = choice[ds + "|" + q.column] !== undefined ? choice[ds + "|" + q.column] : q.suggestion;
+              decisions[ds][q.column] = v === "__keep" ? "" : v === "__hide" ? "-" : v;
+            });
+          });
+          act({ action: "job_resolve", id: job.id, decisions });
+        };
+        const bar = job.status === "failed" ? "bg-red-600" : job.status === "needs_approval" ? "bg-amber-500" : "bg-green-600";
+        return (
+          <div data-testid="job-card" className="space-y-3">
+            <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono">
+              <span className="px-2 py-0.5 rounded bg-[#333] text-[#BBB]">{job.source === "screen" ? "from this screen" : "back-end drop"}</span>
+              <span data-testid="job-status" className={job.status === "failed" ? "text-red-300" : job.status === "done" ? "text-green-300" : "text-amber-300"}>{JOB_STATUS[job.status] || job.status}</span>
+              <span className="text-[#707070]">{job.progress}%</span>
+            </div>
+            <div className="h-1.5 bg-[#2D2D2D] rounded"><div className={"h-1.5 rounded " + bar} style={{ width: job.progress + "%" }} /></div>
+            {job.note && <div className="text-xs text-[#C0C0C0]">{job.note}</div>}
+            {job.error && <div data-testid="job-error" className="text-xs text-red-300">{job.error}</div>}
+            {Object.entries(job.datasets || {}).map(([ds, d]) => (
+              <div key={ds} className="text-xs font-mono flex flex-wrap gap-3 items-center">
+                <span className="text-amber-400">{ds}</span>
+                <span className="text-[#A0A0A0]">{d.state}</span>
+                {d.view && <span className="text-green-300">→ {d.view}</span>}
+                {d.view && <button onClick={() => onAsk(d.view)} className="underline text-amber-400 hover:text-amber-300">Ask about it</button>}
+                {d.error && <span className="text-red-300">{d.error}</span>}
+              </div>
+            ))}
+            {waiting.length > 0 && (
+              <div data-testid="job-approvals" className="border border-amber-700 rounded-lg p-3 space-y-2 bg-[#241E10]">
+                <div className="text-xs text-amber-300 font-semibold">SAMM is not sure about these fields. Choose what each one should be, then approve.</div>
+                {waiting.map(([ds, d]) => d.queue.map((q) => (
+                  <div key={ds + q.column} className="flex flex-wrap items-center gap-3 text-xs font-mono">
+                    <span className="text-white w-40 truncate" title={q.column}>{q.column}</span>
+                    <span className="text-[#808080] max-w-[160px] truncate" title={(q.samples || []).join(", ")}>{(q.samples || []).join(", ")}</span>
+                    <select aria-label={"Decision for " + q.column} value={choice[ds + "|" + q.column] !== undefined ? choice[ds + "|" + q.column] : q.suggestion}
+                      onChange={(e) => setChoice({ ...choice, [ds + "|" + q.column]: e.target.value })}
+                      className="bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-white">
+                      <option value={q.suggestion}>use "{q.suggestion}" ({Math.round(q.confidence * 100)}% sure)</option>
+                      <option value="__keep">keep its own name</option>
+                      <option value="__hide">hide from Gold</option>
+                    </select>
+                  </div>
+                )))}
+                <button data-testid="job-approve" onClick={approve} disabled={busy} className="bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-bold text-xs px-4 py-2 rounded-lg">Approve and continue</button>
+              </div>
+            )}
+            {job.status === "failed" && (
+              <button data-testid="job-retry" onClick={() => act({ action: "job_retry", id: job.id })} disabled={busy} className="border border-[#3D3D3D] hover:border-amber-500 text-xs text-white px-3 py-1.5 rounded-lg">Retry</button>
+            )}
+            <ErrBox err={err} />
+            {(job.log || []).length > 0 && (
+              <details className="text-[11px] text-[#808080]">
+                <summary className="cursor-pointer">What SAMM did ({job.log.length} steps)</summary>
+                <ul className="mt-1 space-y-0.5 font-mono">{job.log.map((l, i) => <li key={i}>{l.ts.slice(11, 19)} {l.msg}</li>)}</ul>
+              </details>
+            )}
+          </div>
+        );
+      }
+
       function OnboardingHub({ session, onAsk, onViewsChanged }) {
         const [items, setItems] = useState([]);
         const [over, setOver] = useState(false);
         const [pipe, setPipe] = useState({ busy: false, msg: "", err: null });
+        const [jobs, setJobs] = useState([]);
         const seq = useRef(0);
         const itemsRef = useRef([]);
         itemsRef.current = items;
@@ -464,6 +558,12 @@
         const upd = (id, patch) => setItems((p) => p.map((i) => (i.id === id ? { ...i, ...patch } : i)));
         const updDs = (id, ds, patch) =>
           setItems((p) => p.map((i) => (i.id === id ? { ...i, datasets: { ...i.datasets, [ds]: { ...i.datasets[ds], ...patch } } } : i)));
+
+        const loadJobs = async () => {
+          try { const r = await api({ action: "jobs" }); setJobs(Array.isArray(r.jobs) ? r.jobs : []); } catch (_) { /* older back end: the manual flow below still works */ }
+        };
+        useEffect(() => { loadJobs(); const t = setInterval(loadJobs, 20000); return () => clearInterval(t); }, []);
+        const mergeJob = (j) => setJobs((p) => (p.some((x) => x.id === j.id) ? p.map((x) => (x.id === j.id ? j : x)) : [j, ...p]));
 
         const loadMapping = async (id, ds) => {
           const pm = await api({ action: "profile_map", dataset: ds });
@@ -478,7 +578,12 @@
             const init = await api({ action: "upload_init", filename: file.name, size: file.size });
             upd(id, { msg: "Uploading to Bronze..." });
             await putFile(init.upload_url, file);
-            upd(id, { stage: "bronze", msg: "Stored in Bronze. Structuring..." });
+            upd(id, { stage: "bronze", msg: "Stored in Bronze. SAMM takes it from here..." });
+            let started = null;
+            try { started = await api({ action: "job_start", key: init.key }); } catch (e) {
+              if (!(e && e.status === 400 && /unknown action/i.test(e.message || ""))) throw e;   // older back end: use the step-by-step flow below
+            }
+            if (started && started.job) { upd(id, { stage: "silver", msg: "", job: started.job }); return; }
             const ing = await api({ action: "ingest", key: init.key });
             if (ing.mode === "archived") {
               upd(id, { stage: "done", msg: ing.note, done: true });
@@ -595,6 +700,21 @@
               <ErrBox err={pipe.err} />
             </div>
 
+            {jobs.filter((j) => !items.some((i) => i.job && i.job.id === j.id)).length > 0 && (
+              <div data-testid="job-list" className="bg-[#222222] border border-[#2D2D2D] rounded-xl p-5 shadow space-y-4">
+                <div>
+                  <h3 className="text-sm font-bold text-white">Recent onboarding jobs</h3>
+                  <p className="text-[11px] text-[#808080] mt-1">Files from this screen and files dropped by other systems run the same job. Anything SAMM is unsure about waits here for you.</p>
+                </div>
+                {jobs.filter((j) => !items.some((i) => i.job && i.job.id === j.id)).slice(0, 8).map((j) => (
+                  <div key={j.id} className="border border-[#2D2D2D] rounded-lg p-4 bg-[#1D1D1D] space-y-2" data-testid="job-row">
+                    <div className="text-sm text-white font-mono truncate">{j.file}</div>
+                    <JobCard job={j} api={api} onUpdate={mergeJob} onAsk={onAsk} onViewsChanged={onViewsChanged} />
+                  </div>
+                ))}
+              </div>
+            )}
+
             {items.map((it) => {
               const idx = STAGES.findIndex((s) => s[0] === it.stage);
               return (
@@ -603,13 +723,14 @@
                     <div className="text-sm text-white font-mono truncate">{it.name}</div>
                     {it.size > 0 && <div className="text-[11px] text-[#808080]">{(it.size / 1024).toFixed(0)} KB</div>}
                   </div>
-                  <div className="flex flex-wrap gap-2 text-[11px] font-mono">
+                  {it.job && <JobCard job={it.job} api={api} onUpdate={(j) => upd(it.id, { job: j })} onAsk={onAsk} onViewsChanged={onViewsChanged} />}
+                  {!it.job && <div className="flex flex-wrap gap-2 text-[11px] font-mono">
                     {STAGES.map((s, n) => (
                       <span key={s[0]} className={"px-2 py-1 rounded border " + (it.done || n < idx ? "border-green-700 text-green-300" : n === idx && !it.error ? "border-amber-500 text-amber-300" : "border-[#333] text-[#707070]")}>
                         {(it.done || n < idx ? "✓ " : "") + s[1]}
                       </span>
                     ))}
-                  </div>
+                  </div>}
                   <div className="text-xs text-[#C0C0C0]" data-testid="onb-msg">{it.msg}</div>
                   <ErrBox err={it.error} />
 
@@ -717,7 +838,7 @@
           try {
             const r = await api({ action: "policy_get", tenant_id: t });
             const p = r.policy || {};
-            setPol({ restricted: (p.restricted_columns || []).join(", "), caps: { ...(p.row_caps || {}) }, scan: p.scan_limit_gb == null ? "" : String(p.scan_limit_gb), meta: r });
+            setPol({ restricted: (p.restricted_columns || []).join(", "), caps: { ...(p.row_caps || {}) }, scan: p.scan_limit_gb == null ? "" : String(p.scan_limit_gb), auto: p.auto_approve_confidence == null ? "" : String(Math.round(p.auto_approve_confidence * 100)), meta: r });
             setPolMsg("");
           } catch (e) { fail(e); }
         };
@@ -748,7 +869,7 @@
           try {
             const caps = {};
             Object.keys(pol.caps).forEach((r) => { if (pol.caps[r] !== "" && pol.caps[r] != null) caps[r] = Number(pol.caps[r]); });
-            await api({ action: "policy_save", tenant_id: policyTenant, policy: { restricted_columns: pol.restricted, row_caps: caps, scan_limit_gb: pol.scan === "" ? null : Number(pol.scan) } });
+            await api({ action: "policy_save", tenant_id: policyTenant, policy: { restricted_columns: pol.restricted, row_caps: caps, scan_limit_gb: pol.scan === "" ? null : Number(pol.scan), auto_approve_confidence: pol.auto === "" ? null : Number(pol.auto) } });
             setPolMsg("Saved. It applies to the next request.");
           } catch (e) { fail(e); } finally { setBusy(false); }
         };
@@ -859,6 +980,10 @@
                   <label className="flex flex-col gap-1 text-[#A0A0A0] max-w-xs">Scan limit per question (GB)
                     <input aria-label="Scan limit" type="number" step="0.01" value={pol.scan} onChange={(e) => setPol({ ...pol, scan: e.target.value })} className={inp} placeholder={"platform " + pol.meta.platform_scan_limit_gb} />
                     <span className="text-[10px] text-[#707070]">Can only be lower than the platform limit ({pol.meta.platform_scan_limit_gb} GB). A lower limit is checked after the query; the platform limit is the hard stop.</span>
+                  </label>
+                  <label className="flex flex-col gap-1 text-[#A0A0A0] max-w-xs">Auto-approve field mappings at or above (%)
+                    <input aria-label="Auto-approve level" type="number" min="50" max="100" value={pol.auto} onChange={(e) => setPol({ ...pol, auto: e.target.value })} className={inp} placeholder="90 (default)" />
+                    <span className="text-[10px] text-[#707070]">When a file arrives, SAMM maps fields it is at least this sure about on its own. Anything lower waits for a Data Engineer. Fields a person approved before are reused.</span>
                   </label>
                   <div className="flex items-center gap-3">
                     <button onClick={savePolicy} disabled={busy} className={btn}>Save policy</button>
