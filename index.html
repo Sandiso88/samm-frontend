@@ -145,6 +145,7 @@
             "If it is a bare AWS 'Forbidden', the Function URL resource policy does not allow public invocation (auth NONE needs a lambda:InvokeFunctionUrl permission for principal *).",
           ],
           409: ["The Gold view has no tenant column, so tenant isolation cannot be enforced. Add tenant_id to the Gold view, or set ALLOW_UNSCOPED=true for single-tenant testing only."],
+          413: ["FinOps circuit breaker: this question would scan more than the per-query data limit, so SAMM stopped it before it could cost money.", "Narrow it by date range, dataset or site, then ask again."],
           429: ["Too many requests or Bedrock throttling. Wait a moment and retry."],
           502: ["The model returned an empty or unusable answer. Retry; check Bedrock model access and MODEL_ID."],
           503: ["The server has no token registry configured (SAMM_TOKEN_REGISTRY is empty)."],
@@ -160,6 +161,7 @@
       // ------------------------------------------------------------------
       // Demo data (clearly labelled as simulated everywhere it is shown)
       // ------------------------------------------------------------------
+      const fmtBytes = (n) => { n = Number(n) || 0; const u = ["B", "KB", "MB", "GB", "TB"]; let i = 0; while (n >= 1024 && i < 4) { n /= 1024; i++; } return (i ? n.toFixed(n < 10 ? 1 : 0) : n) + " " + u[i]; };
       const DEMO_IDENTITY = { email: "demo@samm.local", role: "admin", tenant_id: "DEMO_TENANT", row_cap: 1000 };
 
       function demoQuery(prompt) {
@@ -182,6 +184,7 @@
           tenant_id: "DEMO_TENANT",
           row_cap: 1000,
           truncated: false,
+          finops: { scanned_bytes: 2400000, ceiling_bytes: 5368709120, est_cost_usd: 0.00005, pct_of_ceiling: 0.04, queries: 1 },
         };
       }
 
@@ -217,7 +220,7 @@
         return (
           <div data-testid="error-card" className="border border-red-800 bg-red-950/40 rounded-lg p-4 text-sm">
             <div className="font-bold text-red-300">
-              ⚠️ {status ? "Error " + status : "Connection problem"}
+              ⚠️ {status === 413 ? "FinOps circuit breaker" : status ? "Error " + status : "Connection problem"}
             </div>
             <div className="text-red-200 mt-1 whitespace-pre-wrap">{message}</div>
             {details && details.length > 0 && (
@@ -763,7 +766,7 @@
               d = demoQuery(userText);
             } else {
               // Note: no role and no tenant are sent. The server derives both from the token.
-              d = await callBackend(session.url, session.token, { action: "query", prompt: userText, persona, view: activeView && activeView !== defaultView ? activeView : undefined });
+              d = await callBackend(session.url, session.token, { action: "query", prompt: userText, previous: (() => { const u = messages.filter((x) => x.role === "user"); return u.length ? String(u[u.length - 1].text).slice(0, 500) : undefined; })(), persona, view: activeView && activeView !== defaultView ? activeView : undefined });
             }
             const msgId = "r" + ++nextId.current;
             const { inline, sqlArt } = registerArtifacts(msgId, d.report_markdown, d.executed_sql);
@@ -776,7 +779,7 @@
                 rows: d.raw_data_grid,
                 artifacts: inline,
                 sqlArtifact: sqlArt,
-                meta: { role: d.role, tenant: d.tenant_id, cap: d.row_cap, truncated: d.truncated },
+                meta: { role: d.role, tenant: d.tenant_id, cap: d.row_cap, truncated: d.truncated, finops: d.finops },
                 simulated: demo,
                 timestamp: stamp(),
               },
@@ -950,6 +953,7 @@
                           {msg.meta && (
                             <div className="text-[10px] text-[#707070] mt-2 font-mono">
                               role {msg.meta.role} · tenant {msg.meta.tenant} · row cap {msg.meta.cap}{msg.meta.truncated ? " · results truncated at the cap" : ""}
+                              {msg.meta.finops && (" · scanned " + fmtBytes(msg.meta.finops.scanned_bytes) + " of " + fmtBytes(msg.meta.finops.ceiling_bytes) + " limit · est. $" + msg.meta.finops.est_cost_usd.toFixed(5))}
                             </div>
                           )}
                         </div>
