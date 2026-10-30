@@ -389,6 +389,77 @@
         );
       }
 
+      // ------------------------------------------------------------------
+      // Small safe markdown renderer: headings, **bold**, _italic_, `code`, tables, lists, > notes. Never inserts raw HTML.
+      // ------------------------------------------------------------------
+      function mdInline(text, kp) {
+        const out = [];
+        const re = /\*\*(.+?)\*\*|`([^`]+)`|_([^_\n]+?)_|\*([^*\n]+?)\*/g;
+        let last = 0, m, n = 0;
+        const s = String(text);
+        while ((m = re.exec(s)) !== null) {
+          if (m[3] !== undefined) {   // _italic_ only at word edges, so worked_hours stays as written
+            const before = m.index === 0 ? " " : s[m.index - 1];
+            const after = s[m.index + m[0].length] || " ";
+            if (!/[\s(]/.test(before) || !/[\s).,;:!?]/.test(after)) { re.lastIndex = m.index + 1; continue; }
+          }
+          if (m.index > last) out.push(s.slice(last, m.index));
+          const k = kp + "-" + n++;
+          if (m[1] !== undefined) out.push(<strong key={k} className="text-white">{m[1]}</strong>);
+          else if (m[2] !== undefined) out.push(<code key={k} className="font-mono text-amber-300 bg-[#151515] px-1 rounded">{m[2]}</code>);
+          else out.push(<em key={k}>{m[3] !== undefined ? m[3] : m[4]}</em>);
+          last = m.index + m[0].length;
+        }
+        if (last < s.length) out.push(s.slice(last));
+        return out;
+      }
+
+      function Markdown({ text }) {
+        const lines = String(text || "").split("\n");
+        const blocks = [];
+        let i = 0;
+        const cells = (l) => l.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
+        while (i < lines.length) {
+          const l = lines[i];
+          if (!l.trim()) { i++; continue; }
+          let m;
+          if ((m = l.match(/^(#{1,4})\s+(.*)$/))) {
+            blocks.push(<div key={i} role="heading" aria-level={m[1].length} className="text-base font-bold text-white mt-1 mb-2">{mdInline(m[2], "h" + i)}</div>);
+            i++; continue;
+          }
+          if (l.trim().startsWith("|") && i + 1 < lines.length && /^\s*\|[\s:|-]+\|?\s*$/.test(lines[i + 1])) {
+            const head = cells(l); const body = []; i += 2;
+            while (i < lines.length && lines[i].trim().startsWith("|")) { body.push(cells(lines[i])); i++; }
+            blocks.push(
+              <div key={"t" + i} className="overflow-x-auto my-2">
+                <table data-testid="md-table" className="text-xs font-mono border border-[#2D2D2D] w-full">
+                  <thead><tr className="bg-[#2D2D2D] text-amber-500">{head.map((h, j) => <th key={j} className="text-left px-3 py-1.5 whitespace-nowrap">{mdInline(h, "th" + j)}</th>)}</tr></thead>
+                  <tbody>{body.map((r, ri) => <tr key={ri} className="border-t border-[#2D2D2D]">{head.map((_, j) => <td key={j} className="px-3 py-1.5 whitespace-nowrap">{mdInline(r[j] === undefined ? "" : r[j], "td" + ri + "-" + j)}</td>)}</tr>)}</tbody>
+                </table>
+              </div>
+            );
+            continue;
+          }
+          if (/^\s*[-*]\s+/.test(l)) {
+            const items = [];
+            while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) { items.push(lines[i].replace(/^\s*[-*]\s+/, "")); i++; }
+            blocks.push(<ul key={"u" + i} className="list-disc pl-5 my-1 space-y-0.5">{items.map((it, j) => <li key={j}>{mdInline(it, "li" + j)}</li>)}</ul>);
+            continue;
+          }
+          if (/^>\s?/.test(l)) {
+            const q = [];
+            while (i < lines.length && /^>\s?/.test(lines[i])) { q.push(lines[i].replace(/^>\s?/, "")); i++; }
+            blocks.push(<div key={"q" + i} className="border-l-2 border-amber-500 pl-3 my-2 text-xs text-[#A0A0A0]">{q.map((x, j) => <div key={j}>{mdInline(x, "q" + j)}</div>)}</div>);
+            continue;
+          }
+          const para = [];
+          while (i < lines.length && lines[i].trim() && !/^(#{1,4})\s+/.test(lines[i]) && !lines[i].trim().startsWith("|") && !/^\s*[-*]\s+/.test(lines[i]) && !/^>\s?/.test(lines[i])) { para.push(lines[i]); i++; }
+          if (!para.length) { para.push(lines[i]); i++; }
+          blocks.push(<p key={"p" + i} className="my-1">{para.map((x, j) => <React.Fragment key={j}>{j > 0 && <br />}{mdInline(x, "p" + j)}</React.Fragment>)}</p>);
+        }
+        return <div data-testid="md">{blocks}</div>;
+      }
+
       // Renders message text; fenced code blocks become clickable chips that open the artifact panel.
       function MessageBody({ msg, onOpenArtifact }) {
         const parts = splitBlocks(msg.text || "");
@@ -396,7 +467,7 @@
         return (
           <div className="text-sm leading-relaxed font-sans">
             {parts.map((p, i) => {
-              if (p.type === "text") return <div key={i} className="whitespace-pre-wrap">{p.text}</div>;
+              if (p.type === "text") return msg.role === "user" ? <div key={i} className="whitespace-pre-wrap">{p.text}</div> : <Markdown key={i} text={p.text} />;
               const art = (msg.artifacts || [])[codeIdx++];
               return (
                 <button
@@ -1359,6 +1430,7 @@
         const [views, setViews] = useState([]);
         const [defaultView, setDefaultView] = useState("");
         const [activeView, setActiveView] = useState("");
+        const [talk, setTalk] = useState(null);   // what the last answer was about: { state, context }
         const loadViews = async () => {
           if (demo) return;
           try {
@@ -1424,9 +1496,10 @@
               d = demoQuery(userText);
             } else {
               // Note: no role and no tenant are sent. The server derives both from the token.
-              d = await callBackend(session.url, session.token, { action: "query", prompt: userText, previous: (() => { const u = messages.filter((x) => x.role === "user"); return u.length ? String(u[u.length - 1].text).slice(0, 500) : undefined; })(), persona, view: activeView && activeView !== defaultView ? activeView : undefined });
+              d = await callBackend(session.url, session.token, { action: "query", prompt: userText, previous: (() => { const u = messages.filter((x) => x.role === "user"); return u.length ? String(u[u.length - 1].text).slice(0, 500) : undefined; })(), persona, state: talk ? talk.state : undefined, view: activeView && activeView !== defaultView ? activeView : undefined });
             }
             const msgId = "r" + ++nextId.current;
+            setTalk(d.state ? { state: d.state, context: d.context || "" } : null);
             if (d.routed_view && d.view) setActiveView(d.view);   // the question named a dataset: stay on it for follow-ups
             const { inline, sqlArt } = registerArtifacts(msgId, d.report_markdown, d.executed_sql);
             setMessages((prev) => [
@@ -1545,7 +1618,7 @@
                     <div data-testid="who-role" className="text-white">{ROLE_LABELS[identity.role] || identity.role}</div>
                     <div className="text-[#A0A0A0] truncate" title={identity.email}>{identity.email}</div>
                     <div className="text-[#A0A0A0] truncate" title={identity.tenant_id}>{identity.all_clients ? "All clients (home: " + identity.tenant_id + ")" : "Client: " + identity.tenant_id}</div>
-                    <div data-testid="who-version" className="text-[#707070]">Server {identity.version || "older than v15 - redeploy the backend"} · Screen v15</div>
+                    <div data-testid="who-version" className="text-[#707070]">Server {identity.version || "older than v16 - redeploy the backend"} · Screen v16</div>
                     <button onClick={onSignOut} className="mt-2 text-[#A0A0A0] hover:text-white underline">Sign out</button>
                   </div>
                 )}
@@ -1611,7 +1684,7 @@
                               Show executed SQL
                             </button>
                           )}
-                          <ResultTable rows={msg.rows} />
+                          {!/\n\|[\s:|-]+\|/.test(msg.text || "") && <ResultTable rows={msg.rows} />}
                           {msg.suggestions && msg.suggestions.length > 0 && msg === messages[messages.length - 1] && (
                             <div className="flex flex-wrap gap-2 mt-3" data-testid="suggestions">
                               {msg.suggestions.map((sg) => (
@@ -1650,6 +1723,7 @@
                     onAsk={(v) => {
                       loadViews();
                       setActiveView(v);
+                      setTalk(null);
                       setActiveTab("chat");
                       addMessage({ role: "assistant", text: "Now answering from the dataset **" + v.replace(/^gold_ai_/, "") + "**. Ask a question, for example: How many records are there?" });
                     }}
@@ -1717,6 +1791,10 @@
                     >
                       {PERSONAS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
                     </select>
+                    {talk && talk.context && (
+                      <button data-testid="talk-chip" title="SAMM is answering follow-ups about this. Click to clear." onClick={() => setTalk(null)}
+                        className="text-[10px] font-mono border border-amber-500/50 text-amber-300 rounded-full px-2 py-1 whitespace-nowrap hover:border-amber-400">Talking about: {talk.context} ✕</button>
+                    )}
                     <input
                       aria-label="Ask a question"
                       value={input}
