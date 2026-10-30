@@ -533,12 +533,74 @@
         return makeZip(files);
       }
 
-      function DashboardHub({ tiles, onRemove, onRefresh, onAsk, client, onPublished }) {
+
+      function ReportView({ doc, api, client, onBack, onChanged, onAsk }) {
+        const [cur, setCur] = useState(doc);
+        const [busy, setBusy] = useState(false);
+        const [msg, setMsg] = useState("");
+        useEffect(() => setCur(doc), [doc]);
+        const link = reportLink(cur.id, cur.client || client);
+        const refresh = async () => {
+          setBusy(true); setMsg("");
+          try { const r = await api({ action: "report_refresh", id: cur.id }); setCur(r.report); setMsg("Numbers refreshed."); if (onChanged) onChanged(); } catch (e) { setMsg(e.message || "Could not refresh."); } finally { setBusy(false); }
+        };
+        const bt = "border border-[#2c385d] hover:border-[#8ef4b2] text-white text-xs px-3 py-1.5 rounded-lg disabled:opacity-50";
+        return (
+          <div data-testid="report-view" className="max-w-5xl mx-auto space-y-4 rounded-3xl p-6 border border-[#2c385d]" style={{ background: "radial-gradient(900px 380px at 75% -10%, #1d3a6b 0%, transparent 60%), linear-gradient(180deg,#13214a,#0f1c3f)" }}>
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <img src={DATORE_LOGO} alt="datore" className="h-8" />
+              <span className="text-[11px] text-[#78869b]">{cur.client || client} · updated {String(cur.updated || cur.created || "").slice(0, 16).replace("T", " ")} UTC · by {cur.by}</span>
+            </div>
+            <h2 data-testid="report-title" className="text-3xl md:text-4xl font-extrabold text-white tracking-tight" dangerouslySetInnerHTML={{ __html: dtHeadline(cur.title).replace('class="hl"', 'class="text-[#8ef4b2]"') }} />
+            <div className="flex flex-wrap gap-2">
+              <button onClick={onBack} className={bt} data-testid="report-back">← All reports</button>
+              {cur.kind === "dataset" && <button onClick={refresh} disabled={busy} className={bt} data-testid="report-refresh">{busy ? "Refreshing..." : "Refresh numbers"}</button>}
+              <button onClick={() => { try { navigator.clipboard.writeText(link); setMsg("Link copied."); } catch (_) { setMsg(link); } }} className={bt} data-testid="report-copy">Copy link</button>
+              <button onClick={() => downloadBlob("samm-report-" + String(cur.title || "report").replace(/[^A-Za-z0-9]+/g, "_").slice(0, 30) + ".html", new Blob([reportHtml(cur.title, cur.client || client, cur.tiles || [])], { type: "text/html" }))} className={bt} data-testid="report-download">Download page</button>
+              {cur.dataset && <button onClick={() => onAsk && onAsk(cur.dataset)} className={bt}>Ask about this data</button>}
+            </div>
+            {msg && <div data-testid="report-msg" className="text-[11px] text-[#8ef4b2]">{msg}</div>}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {(cur.tiles || []).map((t, i) => {
+                const single = t.rows.length === 1 ? Object.keys(t.rows[0]).filter((c) => numOf(t.rows[0][c]) !== null).slice(0, 4) : [];
+                return (
+                  <div key={i} data-testid="report-tile" className="bg-white/5 border border-[#2c385d] rounded-2xl p-4 space-y-2 min-w-0">
+                    <div className="text-sm font-bold text-white">{t.title}</div>
+                    {single.length > 0 && <div className="flex flex-wrap gap-3">{single.map((c) => <div key={c} className="bg-[#8ef4b2]/10 border border-[#8ef4b2]/30 rounded-xl px-4 py-2"><div className="text-2xl font-extrabold text-[#8ef4b2]">{fmtNum(numOf(t.rows[0][c]))}</div><div className="text-[11px] text-[#78869b]">{c}</div></div>)}</div>}
+                    <AutoChart rows={t.rows} title={t.title} />
+                    <DataTable rows={t.rows.slice(0, 8)} />
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      }
+
+      function DashboardHub({ tiles, onRemove, onRefresh, onAsk, client, onPublished, api, openId, onOpenHandled }) {
         const [pubTitle, setPubTitle] = useState("");
-        const [pubTool, setPubTool] = useState("html");
+        const [pubTool, setPubTool] = useState("samm");
         const [pubMsg, setPubMsg] = useState("");
+        const [reports, setReports] = useState([]);
+        const [viewing, setViewing] = useState(null);
+        const [repErr, setRepErr] = useState("");
+        const loadReports = async () => { if (!api) return; try { const r = await api({ action: "report_list" }); setReports(r.reports || []); } catch (_) { /* older back end: reports are simply not listed */ } };
+        const openReport = async (id) => {
+          setRepErr("");
+          try { const r = await api({ action: "report_get", id }); setViewing(r.report); } catch (e) { setRepErr(e.message || "Could not open that report."); }
+        };
+        useEffect(() => { loadReports(); }, [client]);
+        useEffect(() => { if (openId && api) { openReport(openId); if (onOpenHandled) onOpenHandled(); } }, [openId]);
         const publish = async () => {
           const title = (pubTitle || "SAMM report").trim();
+          if (pubTool === "samm") {
+            try {
+              const r = await api({ action: "report_publish", title, tiles: tiles.filter((t) => t.rows && t.rows.length).map((t) => ({ title: t.title, rows: t.rows, at: t.at })) });
+              setViewing(r.report); loadReports();
+              setPubMsg("Published. Copy the link from the report page.");
+            } catch (e) { setPubMsg("Could not publish: " + (e && e.message ? e.message : e)); }
+            return;
+          }
           try {
             const blob = buildPackage(pubTool, title, client || "", tiles.filter((t) => t.rows && t.rows.length));
             downloadBlob("samm-" + pubTool + "-" + title.replace(/[^A-Za-z0-9]+/g, "_").slice(0, 30) + (pubTool === "html" ? ".html" : ".zip"), blob);
@@ -547,6 +609,7 @@
           } catch (e) { setPubMsg("Could not create the package: " + (e && e.message ? e.message : e)); }
         };
         const [busy, setBusy] = useState("");
+        if (viewing) return <ReportView doc={viewing} api={api} client={client} onBack={() => { setViewing(null); loadReports(); }} onChanged={loadReports} onAsk={(ds) => onAsk && onAsk("Describe the dataset " + String(ds).replace(/^silver_/, ""))} />;
         return (
           <div data-testid="dashboard" className="max-w-5xl mx-auto space-y-4 rounded-3xl p-6 border border-[#2c385d]" style={{ background: "radial-gradient(900px 380px at 75% -10%, #1d3a6b 0%, transparent 60%), linear-gradient(180deg,#13214a,#0f1c3f)" }}>
             <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -578,14 +641,27 @@
                 <div className="flex flex-wrap items-center gap-2 text-xs">
                   <input aria-label="Report title" value={pubTitle} onChange={(e) => setPubTitle(e.target.value)} placeholder="Report title" className="bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-white w-64 focus:outline-none focus:border-amber-500" />
                   <select aria-label="Publish to" value={pubTool} onChange={(e) => setPubTool(e.target.value)} className="bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-white">
-                    <option value="html">Datore report (.html)</option><option value="powerbi">Power BI package</option><option value="sisense">Sisense package</option>
+                    <option value="samm">SAMM report link (shareable)</option><option value="html">Datore report (.html)</option><option value="powerbi">Power BI package</option><option value="sisense">Sisense package</option>
                   </select>
                   <button data-testid="publish" onClick={publish} className="border border-[#3D3D3D] hover:border-amber-500 text-white px-3 py-1 rounded-md">Publish</button>
                 </div>
                 {pubMsg && <div data-testid="publish-msg" className="text-[11px] text-emerald-300">{pubMsg}</div>}
+
                 <div className="text-[10px] text-[#707070]">{pubTool === "html" ? "Creates one good-looking report page from the tiles below. Open it in a browser or print it to PDF." : "Creates a ready-to-import package (data files, " + (pubTool === "powerbi" ? "DAX measures" : "a data model description") + " and a styled report.html) from the tiles below."} The numbers are exactly as SAMM calculated them for you.</div>
               </div>
             )}
+            <div data-testid="published-reports" className="bg-white/5 border border-[#2c385d] rounded-2xl p-4 space-y-2">
+              <div className="text-sm font-bold text-white">Published reports{client ? " · " + client : ""}</div>
+              {repErr && <div className="text-[11px] text-amber-200">{repErr}</div>}
+              {reports.length === 0 && <div className="text-[11px] text-[#78869b]">Nothing published yet. Publish from a dataset (Add data) or pin charts below and choose "SAMM report link".</div>}
+              {reports.map((r) => (
+                <div key={r.id} data-testid="report-row" className="flex flex-wrap items-center gap-3 text-xs">
+                  <span className="text-white font-semibold">{r.title}</span>
+                  <span className="text-[#78869b]">{r.tiles} tile(s) · {String(r.updated || r.created || "").slice(0, 10)} · {r.by}</span>
+                  <button data-testid="report-open" onClick={() => openReport(r.id)} className="underline text-[#8ef4b2] hover:text-white">Open</button>
+                </div>
+              ))}
+            </div>
             {tiles.length === 0 && <div className="bg-white/5 border border-[#2c385d] rounded-2xl p-6 text-sm text-[#b8c2d6]">Nothing pinned yet. Ask a question in the chat, then choose <b>Pin to dashboard</b> under its chart.</div>}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               {tiles.map((t) => (
@@ -1181,6 +1257,87 @@
           </div>
         );
       }
+
+      // v22: look at the data in each layer, publish a report, and open it again from a link.
+      function reportLink(id, client) {
+        return window.location.origin + window.location.pathname + "#report=" + id + (client ? "&client=" + encodeURIComponent(client) : "");
+      }
+      function DataTable({ columns, rows }) {
+        const cols = columns && columns.length ? columns : Object.keys((rows || [])[0] || {});
+        if (!rows || !rows.length) return <div className="text-xs text-[#808080]">No rows to show.</div>;
+        return (
+          <div className="overflow-auto max-h-80 border border-[#2D2D2D] rounded-lg">
+            <table className="w-full text-[11px] font-mono">
+              <thead><tr>{cols.map((c) => <th key={c} className="text-left text-amber-400 px-2 py-1 sticky top-0 bg-[#1D1D1D] whitespace-nowrap">{c}</th>)}</tr></thead>
+              <tbody>{rows.map((r, i) => <tr key={i} className="border-t border-[#2D2D2D]">{cols.map((c) => <td key={c} className="px-2 py-1 text-[#D0D0D0] whitespace-nowrap max-w-[220px] truncate" title={String(r[c] ?? "")}>{String(r[c] ?? "")}</td>)}</tr>)}</tbody>
+            </table>
+          </div>
+        );
+      }
+      function DataViewer({ api, dataset }) {
+        const [layer, setLayer] = useState("gold");
+        const [res, setRes] = useState({});
+        const [busy, setBusy] = useState(false);
+        const load = async (l) => {
+          setLayer(l);
+          if (res[l]) return;
+          setBusy(true);
+          try { const r = await api({ action: "data_peek", dataset, layer: l }); setRes((p) => ({ ...p, [l]: r })); }
+          catch (e) { setRes((p) => ({ ...p, [l]: { error: e.message || "Could not load." } })); } finally { setBusy(false); }
+        };
+        useEffect(() => { load("gold"); }, []);
+        const cur = res[layer];
+        return (
+          <div data-testid="data-viewer" className="border border-[#2D2D2D] rounded-lg p-3 bg-[#1B1B1B] space-y-2">
+            <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono">
+              {[["bronze", "Bronze · original file"], ["silver", "Silver · converted rows"], ["gold", "Gold · business view"]].map(([l, label]) => (
+                <button key={l} data-testid={"layer-" + l} onClick={() => load(l)} className={"px-2 py-1 rounded border " + (layer === l ? "border-amber-500 text-amber-300" : "border-[#3D3D3D] text-[#A0A0A0] hover:text-white")}>{label}</button>
+              ))}
+              {busy && <span className="text-[#808080]">Loading...</span>}
+            </div>
+            {cur && cur.error && <div data-testid="peek-error" className="text-xs text-amber-200">{cur.error}</div>}
+            {cur && !cur.error && (
+              <>
+                <div data-testid="peek-meta" className="text-[11px] text-[#A0A0A0]">
+                  {cur.file ? cur.file + " · " : ""}{cur.total != null ? Number(cur.total).toLocaleString() + " rows" : ""}{(cur.rows || []).length ? " · showing the first " + cur.rows.length : ""}{cur.note ? " · " + cur.note : ""}
+                </div>
+                <DataTable columns={cur.columns} rows={cur.rows} />
+              </>
+            )}
+          </div>
+        );
+      }
+      function DatasetTools({ api, dataset, view, client, onAsk }) {
+        const [show, setShow] = useState(false);
+        const [pub, setPub] = useState({ busy: false, doc: null, err: null, copied: false });
+        const publish = async () => {
+          setPub({ busy: true, doc: null, err: null, copied: false });
+          try { const r = await api({ action: "report_publish", dataset }); setPub({ busy: false, doc: r, err: null, copied: false }); }
+          catch (e) { setPub({ busy: false, doc: null, err: e, copied: false }); }
+        };
+        const link = pub.doc ? reportLink(pub.doc.id, pub.doc.client || client) : "";
+        return (
+          <div className="space-y-2" data-testid="dataset-tools">
+            <div className="flex flex-wrap gap-3 text-xs font-mono">
+              <button data-testid="view-data" onClick={() => setShow((v) => !v)} className="underline text-amber-400 hover:text-amber-300">{show ? "Hide data" : "View data (Bronze · Silver · Gold)"}</button>
+              <button data-testid="publish-report" onClick={publish} disabled={pub.busy} className="underline text-amber-400 hover:text-amber-300 disabled:opacity-50">{pub.busy ? "Publishing..." : "Publish report"}</button>
+            </div>
+            {show && <DataViewer api={api} dataset={dataset} />}
+            <ErrBox err={pub.err} />
+            {pub.doc && (
+              <div data-testid="published" className="border border-green-800 bg-[#10241A] rounded-lg p-3 space-y-2 text-xs">
+                <div className="text-green-300 font-semibold">Report published: {pub.doc.title}</div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <input readOnly aria-label="Report link" value={link} onFocus={(e) => e.target.select()} className="flex-1 min-w-[240px] bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-white font-mono text-[11px]" />
+                  <button data-testid="copy-link" onClick={() => { try { navigator.clipboard.writeText(link); } catch (_) { /* the link can still be selected and copied by hand */ } setPub((p) => ({ ...p, copied: true })); }} className="border border-[#3D3D3D] hover:border-amber-500 text-white px-3 py-1 rounded-md">{pub.copied ? "Copied" : "Copy link"}</button>
+                  <button data-testid="open-report" onClick={() => window.dispatchEvent(new CustomEvent("samm-open-report", { detail: { id: pub.doc.id } }))} className="bg-amber-600 hover:bg-amber-500 text-white font-bold px-3 py-1 rounded-md">Open report</button>
+                </div>
+                <div className="text-[11px] text-[#A0A0A0]">Anyone signed in to SAMM with access to this client can open the link. The numbers refresh when you press Refresh in the report.</div>
+              </div>
+            )}
+          </div>
+        );
+      }
       const JOB_STATUS = {
         queued: "Starting...", running: "SAMM is working on it...", waiting: "Waiting for the Excel conversion to finish...",
         needs_approval: "Needs your confirmation", done: "Done", failed: "Stopped with an error",
@@ -1242,13 +1399,16 @@
             {job.note && <div className="text-xs text-[#C0C0C0]">{job.note}</div>}
             {job.error && <div data-testid="job-error" className="text-xs text-red-300">{job.error}</div>}
             {Object.entries(job.datasets || {}).map(([ds, d]) => (
-              <div key={ds} className="text-xs font-mono flex flex-wrap gap-3 items-center">
+              <div key={ds} className="space-y-2">
+              <div className="text-xs font-mono flex flex-wrap gap-3 items-center">
                 <span className="text-amber-400">{ds}</span>
                 <span className="text-[#A0A0A0]">{d.state}</span>
                 {d.view && <span className="text-green-300">→ {d.view}</span>}
                 {d.view && <button onClick={() => onAsk(d.view)} className="underline text-amber-400 hover:text-amber-300">Ask about it</button>}
                 {(d.state === "review" || d.view) && <button data-testid={"job-edit-" + ds} onClick={() => setEditing(editing === ds ? null : ds)} className="underline text-amber-400 hover:text-amber-300">{d.state === "review" ? "Review mapping & rules" : "Edit mapping & rules"}</button>}
                 {d.error && <span className="text-red-300">{d.error}</span>}
+              </div>
+              {d.view && <DatasetTools api={api} dataset={ds} view={d.view} onAsk={onAsk} />}
               </div>
             ))}
             {editing && <MappingEditor key={editing} dataset={editing} jobId={(job.datasets[editing] || {}).state === "review" ? job.id : null} api={api} onAsk={onAsk}
@@ -1415,6 +1575,7 @@
                   <button onClick={() => onAsk(d.view)} className="underline text-amber-400 hover:text-amber-300">Ask about it</button>
                   <button data-testid={"gold-edit-" + d.dataset} onClick={() => setOpen(open === d.dataset ? null : d.dataset)} className="underline text-amber-400 hover:text-amber-300">{d.can_edit ? "Edit mapping & rules" : "View mapping & rules"}</button>
                 </div>
+                <DatasetTools api={api} dataset={d.dataset} view={d.view} onAsk={onAsk} />
                 {open === d.dataset && <MappingEditor key={d.dataset} dataset={d.dataset} api={api} onAsk={onAsk} onClose={() => setOpen(null)} onBuilt={() => load()} />}
               </div>
             ))}
@@ -1946,6 +2107,18 @@
         const [acting, setActing] = useState("");
         const cname = (c) => clientNames[c] || c;
         useEffect(() => { window.__sammClient = null; window.__sammHome = identity.tenant_id; return () => { window.__sammClient = null; }; }, []);
+        const [openReportId, setOpenReportId] = useState("");
+        useEffect(() => {
+          const take = (id) => { setActiveTab("dashboard"); setOpenReportId(id); };
+          const m = /#report=([a-f0-9]{16})(?:&client=([A-Za-z0-9_\-]{1,64}))?/.exec(window.location.hash || "");
+          if (m) {
+            if (m[2] && m[2] !== identity.tenant_id) { window.__sammClient = m[2]; setActing(m[2]); }
+            take(m[1]);
+          }
+          const on = (e) => e.detail && e.detail.id && take(e.detail.id);
+          window.addEventListener("samm-open-report", on);
+          return () => window.removeEventListener("samm-open-report", on);
+        }, []);
         useEffect(() => {
           if (demo) return;
           callBackend(session.url, session.token, { action: "clients" }).then((r) => { setClients((r.clients || []).filter((c) => c !== "UNASSIGNED_NEW_CLIENT")); setClientNames(r.names || {}); setActing((a) => a || r.home || ""); }).catch(() => {});
@@ -2157,7 +2330,7 @@
                   <div className="text-xs font-mono space-y-1">
                     <div data-testid="who-role" className="text-white">{ROLE_LABELS[identity.role] || identity.role}</div>
                     <div className="text-[#A0A0A0] truncate" title={identity.email}>{identity.email}</div>
-                    <div data-testid="who-version" className="text-[#707070]">Server {identity.version || "older than v21 - redeploy the backend"} · Screen v21</div>
+                    <div data-testid="who-version" className="text-[#707070]">Server {identity.version || "older than v22 - redeploy the backend"} · Screen v22</div>
                     <button onClick={onSignOut} className="mt-2 text-[#A0A0A0] hover:text-white underline">Sign out</button>
                   </div>
                 )}
@@ -2311,7 +2484,7 @@
                 )}
 
                 {activeTab === "dashboard" && (
-                  <DashboardHub client={acting || identity.tenant_id} onPublished={(tool, title, n) => callBackend(session.url, session.token, { action: "publish_report", tool, title, tiles: n }).catch(() => {})} tiles={tiles} onRemove={(id) => setTiles((p) => p.filter((x) => x.id !== id))} onRefresh={refreshTile}
+                  <DashboardHub client={acting || identity.tenant_id} api={(p) => callBackend(session.url, session.token, p)} openId={openReportId} onOpenHandled={() => setOpenReportId("")} onPublished={(tool, title, n) => callBackend(session.url, session.token, { action: "publish_report", tool, title, tiles: n }).catch(() => {})} tiles={tiles} onRemove={(id) => setTiles((p) => p.filter((x) => x.id !== id))} onRefresh={refreshTile}
                     onAsk={(q) => { setActiveTab("chat"); sendText(q); }} />
                 )}
 
