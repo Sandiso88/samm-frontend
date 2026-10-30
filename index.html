@@ -773,6 +773,77 @@
         );
       }
 
+      function TeachPanel({ api }) {
+        const [d, setD] = useState(null);
+        const [err, setErr] = useState(null);
+        const [msg, setMsg] = useState("");
+        const [f, setF] = useState({ kind: "filter", phrase: "", column: "", op: "eq", value: "", fn: "count" });
+        const inp = "bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-white text-xs focus:outline-none focus:border-amber-500";
+        const load = async () => { try { const r = await api({ action: "teach_list" }); if (!r || !r.taught || !r.columns) return; setD(r); setF((p) => ({ ...p, column: p.column || (r.columns[0] || {}).name || "" })); } catch (e) { setErr(e); } };
+        useEffect(() => { load(); }, []);
+        if (!d && !err) return null;
+        if (err && !d) return <div className="bg-[#222222] border border-[#2D2D2D] rounded-xl p-5"><ErrBox err={err} /></div>;
+        const save = async () => {
+          setErr(null); setMsg("");
+          try {
+            const body = { action: "teach_save", kind: f.kind, phrase: f.phrase, column: f.column };
+            if (f.kind === "filter") { body.op = f.op; body.value = f.value; }
+            if (f.kind === "measure") body.fn = f.fn;
+            const r = await api(body); setMsg(r.note); setF({ ...f, phrase: "", value: "" }); load();
+          } catch (e) { setErr(e); }
+        };
+        const del = async (payload) => { setErr(null); try { await api({ action: "teach_delete", ...payload }); load(); } catch (e) { setErr(e); } };
+        const rules = [];
+        Object.entries(d.taught.aliases || {}).forEach(([p, c]) => rules.push({ p, t: "means the column " + c }));
+        Object.entries(d.taught.filters || {}).forEach(([p, x]) => rules.push({ p, t: "filters " + x.column + " " + x.op + (x.value !== undefined ? " " + (Array.isArray(x.value) ? x.value.join(", ") : x.value) : "") }));
+        Object.entries(d.taught.measures || {}).forEach(([p, x]) => rules.push({ p, t: "calculates " + x.fn + (x.column ? " of " + x.column : "") }));
+        const noValue = f.op === "null" || f.op === "notnull";
+        return (
+          <div data-testid="teach-panel" className="bg-[#222222] border border-[#2D2D2D] rounded-xl p-5 shadow space-y-3">
+            <div>
+              <h3 className="text-sm font-bold text-white">Teach SAMM</h3>
+              <p className="text-[11px] text-[#808080] mt-1">Your team's own words. Teach a phrase once (for example "overdue" means status is Pending) and everyone at this client can use it in questions.</p>
+            </div>
+            {d.unmatched.length > 0 && (
+              <div data-testid="unmatched-list" className="space-y-1">
+                <div className="text-[11px] text-[#A0A0A0]">Questions SAMM could not answer</div>
+                {d.unmatched.slice(0, 6).map((u) => (
+                  <div key={u.q} className="flex items-center gap-3 text-xs">
+                    <span className="text-white font-mono truncate max-w-[60%]" title={u.q}>{u.q}</span>
+                    <span className="text-[#707070]">asked {u.n}x</span>
+                    <button onClick={() => setF({ ...f, phrase: u.q.toLowerCase().slice(0, 40) })} className="text-amber-400 hover:text-amber-300 underline">Teach this</button>
+                    <button aria-label={"Dismiss " + u.q} onClick={() => del({ unmatched: u.q })} className="text-[#808080] hover:text-white">✕</button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <input aria-label="Phrase" value={f.phrase} onChange={(e) => setF({ ...f, phrase: e.target.value })} placeholder="phrase, e.g. overdue" className={inp + " w-44"} />
+              <select aria-label="Teach type" value={f.kind} onChange={(e) => setF({ ...f, kind: e.target.value })} className={inp}>
+                <option value="filter">is a filter</option><option value="alias">is another name for a column</option><option value="measure">is a calculation</option>
+              </select>
+              {f.kind === "measure" && <select aria-label="Calculation" value={f.fn} onChange={(e) => setF({ ...f, fn: e.target.value })} className={inp}>{d.fns.map((x) => <option key={x}>{x}</option>)}</select>}
+              {!(f.kind === "measure" && f.fn === "count") && <select aria-label="Teach column" value={f.column} onChange={(e) => setF({ ...f, column: e.target.value })} className={inp}>{d.columns.map((c) => <option key={c.name}>{c.name}</option>)}</select>}
+              {f.kind === "filter" && <select aria-label="Filter operation" value={f.op} onChange={(e) => setF({ ...f, op: e.target.value })} className={inp}>{d.ops.map((x) => <option key={x}>{x}</option>)}</select>}
+              {f.kind === "filter" && !noValue && <input aria-label="Filter value" value={f.value} onChange={(e) => setF({ ...f, value: e.target.value })} placeholder={f.op === "between" ? "5, 20" : f.op === "in" ? "a, b, c" : "value"} className={inp + " w-40"} />}
+              <button data-testid="teach-save" onClick={save} className="border border-[#3D3D3D] hover:border-amber-500 text-white px-3 py-1 rounded-md">Teach</button>
+            </div>
+            <ErrBox err={err} />
+            {msg && <div data-testid="teach-note" className="text-xs text-green-300">{msg}</div>}
+            {rules.length > 0 && (
+              <div className="space-y-1" data-testid="taught-list">
+                {rules.map((r) => (
+                  <div key={r.p} className="flex items-center gap-3 text-xs">
+                    <span className="font-mono text-amber-400">{r.p}</span><span className="text-[#A0A0A0]">{r.t}</span>
+                    <button aria-label={"Forget " + r.p} onClick={() => del({ phrase: r.p })} className="text-[#808080] hover:text-red-300">✕</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      }
+
       function GoldViews({ api, onAsk, tick }) {
         const [rows, setRows] = useState(null);
         const [open, setOpen] = useState(null);
@@ -956,6 +1027,7 @@
             )}
 
             <GoldViews api={api} onAsk={onAsk} tick={viewsTick} />
+            <TeachPanel api={api} />
 
             {items.map((it) => {
               const idx = STAGES.findIndex((s) => s[0] === it.stage);
