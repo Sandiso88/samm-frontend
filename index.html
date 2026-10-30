@@ -750,7 +750,7 @@
             <div data-testid="published-reports" className="bg-white/5 border border-[#2c385d] rounded-2xl p-4 space-y-2">
               <div className="text-sm font-bold text-white">Published reports{client ? " · " + client : ""}</div>
               {repErr && <div className="text-[11px] text-amber-200">{repErr}</div>}
-              {reports.length === 0 && <div className="text-[11px] text-[#78869b]">Nothing published yet. Publish from a dataset (Add data) or pin charts below and choose "SAMM report link".</div>}
+              {reports.length === 0 && <div className="text-[11px] text-[#78869b]">Nothing published yet. Publish from a dataset (Onboarding) or pin charts below and choose "SAMM report link".</div>}
               {reports.map((r) => (
                 <div key={r.id} data-testid="report-row" className="flex flex-wrap items-center gap-3 text-xs">
                   <span className="text-white font-semibold">{r.title}</span>
@@ -1989,7 +1989,7 @@
                       <div data-testid="misfile-warn" className="border border-amber-700 bg-[#2A2410] rounded-lg p-3 text-xs text-amber-100 space-y-2">
                         <div>⚠ This table may belong to <b>{mis.verdict.client}</b>. Its values match {mis.verdict.client} at {pctT(mis.verdict.match_other)} but this client at only {pctT(mis.verdict.match_own)}.</div>
                         {!mis.flagged ? <button data-testid="misfile-flag" onClick={flag} className="border border-amber-500 text-amber-200 hover:bg-amber-900/30 px-3 py-1 rounded">Record a move request to {mis.verdict.client}</button>
-                          : <div data-testid="misfile-flagged" className="text-green-300">Recorded and logged. To finish the move: upload the original file under {mis.verdict.client} (Add data), then remove this copy.</div>}
+                          : <div data-testid="misfile-flagged" className="text-green-300">Recorded and logged. To finish the move: upload the original file under {mis.verdict.client} (Onboarding), then remove this copy.</div>}
                       </div>
                     )}
                   </div>
@@ -2133,7 +2133,7 @@
           <div className="max-w-4xl mx-auto space-y-5" data-testid="onboarding-hub">
             <div className="bg-[#222222] border border-[#2D2D2D] rounded-xl p-6 shadow-xl space-y-4">
               <div>
-                <h2 className="text-lg font-bold text-white">📦 Add data</h2>
+                <h2 className="text-lg font-bold text-white">📦 Onboarding</h2>
                 <p className="text-xs text-[#A0A0A0] mt-1">Drop a file and SAMM keeps the original (Bronze), turns it into rows and columns (Silver), suggests how its columns match your standard names, and builds a view you can ask questions about (Gold). csv, tsv, json, jsonl, txt and Excel are structured; other formats are archived untouched.</p>
               </div>
               <div data-testid="onb-tabs" role="tablist" className="flex flex-wrap gap-2 border-b border-[#2D2D2D] pb-3">
@@ -2816,7 +2816,7 @@
                     title={canOnboard ? "" : "Requires Data Engineer or above"}
                     className={navClass("onboarding", !canOnboard)}
                   >
-                    <span>📦 Add data</span>
+                    <span>📦 Onboarding</span>
                   </button>
                   <button
                     onClick={() => canGovern && setActiveTab("governance")}
