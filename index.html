@@ -11,6 +11,14 @@
     <script src="https://unpkg.com/@babel/standalone@7.25.6/babel.min.js"></script>
     <!-- Tailwind CSS framework (pinned) -->
     <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+    <style>
+      * { scrollbar-width: thin; scrollbar-color: #3d3d3d #1b1b1b; }
+      *::-webkit-scrollbar { width: 10px; height: 10px; }
+      *::-webkit-scrollbar-track { background: #1b1b1b; }
+      *::-webkit-scrollbar-thumb { background: #3d3d3d; border-radius: 8px; border: 2px solid #1b1b1b; }
+      *::-webkit-scrollbar-thumb:hover { background: #55607a; }
+      *::-webkit-scrollbar-corner { background: #1b1b1b; }
+    </style>
   </head>
   <body style="margin: 0; padding: 0; background-color: #191919; color: #E3E3E3; font-family: sans-serif;">
     <div id="root"></div>
@@ -472,7 +480,7 @@
         const k = Math.min(2, Math.ceil(w.length / 2));
         return dtEsc(w.slice(0, w.length - k).join(" ")) + " <span class=\"hl\">" + dtEsc(w.slice(w.length - k).join(" ")) + "</span>";
       }
-      function dtChartSvg(rows) {
+      function dtChartSvg(rows, accent) {
         const m = chartModel(rows); if (!m) return "";
         const data = rows.slice(0, 12), c = m.series[0], W = 560, H = 210, L = 44, T = 10, B = 44, pw = W - L - 10, ph = H - T - B;
         const vals = data.map((r) => numOf(r[c]) || 0), mx = niceMax(Math.max.apply(null, vals.concat([0]))), step = pw / data.length;
@@ -480,27 +488,28 @@
         [0, 0.5, 1].forEach((f) => { const y = T + ph - f * ph; out += '<line x1="' + L + '" x2="' + (W - 10) + '" y1="' + y + '" y2="' + y + '" stroke="' + DT.line + '"/><text x="' + (L - 6) + '" y="' + (y + 3) + '" text-anchor="end" fill="' + DT.mute + '">' + dtEsc(fmtNum(f * mx)) + "</text>"; });
         data.forEach((r, i) => {
           const h = (vals[i] / mx) * ph, x = L + i * step + step * 0.18, w = step * 0.64, t = String(r[m.label]);
-          out += '<rect x="' + x + '" y="' + (T + ph - h) + '" width="' + w + '" height="' + h + '" rx="4" fill="' + DT.mint + '" opacity="' + (i === 0 ? 1 : 0.78) + '"/>';
+          out += '<rect x="' + x + '" y="' + (T + ph - h) + '" width="' + w + '" height="' + h + '" rx="4" fill="' + (accent || DT.mint) + '" opacity="' + (i === 0 ? 1 : 0.78) + '"/>';
           out += '<text x="' + (x + w / 2) + '" y="' + (T + ph + 14) + '" text-anchor="end" fill="' + DT.mute + '" transform="rotate(-30 ' + (x + w / 2) + " " + (T + ph + 14) + ')">' + dtEsc(t.length > 12 ? t.slice(0, 11) + "…" : t) + "</text>";
         });
         return out + "</svg>";
       }
-      function reportHtml(title, client, tiles) {
+      function reportHtml(title, client, tiles, accent) {
+        const AC = /^#[0-9a-fA-F]{6}$/.test(accent || "") ? accent : DT.mint, ACrgb = [1, 3, 5].map((i) => parseInt(AC.slice(i, i + 2), 16)).join(",");
         const stamp = new Date().toISOString().slice(0, 16).replace("T", " ") + " UTC";
         const cards = tiles.map((t) => {
           const cols = Object.keys(t.rows[0] || {}), shown = t.rows.slice(0, 8);
           const single = t.rows.length === 1 ? cols.filter((c) => numOf(t.rows[0][c]) !== null) : [];
           const kpis = single.length ? '<div class="kpis">' + single.slice(0, 4).map((c) => '<div class="kpi"><b>' + dtEsc(fmtNum(numOf(t.rows[0][c]))) + "</b><span>" + dtEsc(c) + "</span></div>").join("") + "</div>" : "";
           const table = '<table><thead><tr>' + cols.map((c) => "<th>" + dtEsc(c) + "</th>").join("") + "</tr></thead><tbody>" + shown.map((r) => "<tr>" + cols.map((c) => '<td class="' + (numOf(r[c]) !== null ? "n" : "") + '">' + dtEsc(r[c]) + "</td>").join("") + "</tr>").join("") + "</tbody></table>" + (t.rows.length > 8 ? '<div class="more">Showing 8 of ' + t.rows.length + " rows. The full data is in the CSV files.</div>" : "");
-          return '<section class="card"><h3>' + dtEsc(t.title) + "</h3>" + kpis + '<div class="chart">' + dtChartSvg(t.rows) + "</div>" + table + "</section>";
+          return '<section class="card"><h3>' + dtEsc(t.title) + "</h3>" + kpis + '<div class="chart">' + (t.chart === false ? "" : dtChartSvg(t.rows, AC)) + "</div>" + table + "</section>";
         }).join("");
         const summary = tiles.map((t) => '<div class="src"><i></i><div><b>' + dtEsc(t.title) + "</b><span>" + t.rows.length + " row" + (t.rows.length === 1 ? "" : "s") + "</span></div></div>").join("");
-        const css = "*{box-sizing:border-box}body{margin:0;font-family:Inter,system-ui,Segoe UI,sans-serif;color:#fff;background:radial-gradient(1200px 500px at 70% -10%,#1d3a6b 0%,transparent 60%),linear-gradient(180deg," + DT.navy + "," + DT.navy2 + ");min-height:100vh}.wrap{max-width:1100px;margin:0 auto;padding:28px 24px 48px}header{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}header img{height:34px}header .meta{color:" + DT.mute + ";font-size:12px}h1{font-size:40px;line-height:1.1;margin:28px 0 6px;font-weight:800;letter-spacing:-.02em}.hl{color:" + DT.mint + "}.sub{color:#b8c2d6;margin:0 0 22px}.layers{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 22px}.pill{border:1px dashed " + DT.line + ";border-radius:12px;padding:8px 14px;font-size:12px;color:" + DT.mute + "}.pill b{display:block;color:#fff;font-size:13px}.pill.on{border:1px solid " + DT.mint + ";color:" + DT.mint + ";background:rgba(142,244,178,.07)}.srcs{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px;margin-bottom:22px}.src{display:flex;gap:10px;align-items:center;background:rgba(255,255,255,.04);border:1px solid " + DT.line + ";border-radius:14px;padding:12px 14px}.src i{width:9px;height:9px;border-radius:50%;background:" + DT.mint + ";flex:none}.src b{display:block;font-size:13px}.src span{color:" + DT.mute + ";font-size:11px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(480px,1fr));gap:16px}.card{background:rgba(255,255,255,.04);border:1px solid " + DT.line + ";border-radius:18px;padding:18px;overflow:hidden}.card h3{margin:0 0 12px;font-size:16px}.kpis{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:10px}.kpi{background:rgba(142,244,178,.08);border:1px solid rgba(142,244,178,.25);border-radius:12px;padding:10px 16px}.kpi b{display:block;font-size:26px;color:" + DT.mint + "}.kpi span{font-size:11px;color:" + DT.mute + "}.chart svg{width:100%;height:auto}table{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px}th{color:" + DT.mute + ";text-align:left;font-weight:600;font-size:10px;letter-spacing:.06em;text-transform:uppercase;border-bottom:1px solid " + DT.line + ";padding:6px 8px}td{padding:6px 8px;border-bottom:1px solid rgba(44,56,93,.6)}td.n{text-align:right;font-variant-numeric:tabular-nums}.more{color:" + DT.mute + ";font-size:11px;margin-top:6px}footer{margin-top:28px;color:" + DT.mute + ";font-size:11px}@media print{body{background:" + DT.navy + ";-webkit-print-color-adjust:exact;print-color-adjust:exact}}@media(max-width:560px){.grid{grid-template-columns:1fr}h1{font-size:28px}}";
-        return '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' + dtEsc(title) + "</title><style>" + css + "</style></head><body><div class=\"wrap\"><header><img src=\"" + DATORE_LOGO + "\" alt=\"datore\"><div class=\"meta\">" + dtEsc(client || "") + " · " + stamp + "</div></header><h1>" + dtHeadline(title) + "</h1><p class=\"sub\">Every number below comes from your trusted data and follows your access limits.</p><div class=\"layers\"><div class=\"pill\"><b>Collected</b>Bronze</div><div class=\"pill\"><b>Cleaned</b>Silver</div><div class=\"pill on\"><b>Trusted</b>Gold</div></div><div class=\"srcs\">" + summary + '</div><div class="grid">' + cards + "</div><footer>Created by SAMM for " + dtEsc(client || "your organisation") + ". Figures are as calculated at " + stamp + ".</footer></div></body></html>";
+        const css = "*{box-sizing:border-box}body{margin:0;font-family:Inter,system-ui,Segoe UI,sans-serif;color:#fff;background:radial-gradient(1200px 500px at 70% -10%,#1d3a6b 0%,transparent 60%),linear-gradient(180deg," + DT.navy + "," + DT.navy2 + ");min-height:100vh}.wrap{max-width:1100px;margin:0 auto;padding:28px 24px 48px}header{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}header img{height:34px}header .meta{color:" + DT.mute + ";font-size:12px}h1{font-size:40px;line-height:1.1;margin:28px 0 6px;font-weight:800;letter-spacing:-.02em}.hl{color:" + AC + "}.sub{color:#b8c2d6;margin:0 0 22px}.layers{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 22px}.pill{border:1px dashed " + DT.line + ";border-radius:12px;padding:8px 14px;font-size:12px;color:" + DT.mute + "}.pill b{display:block;color:#fff;font-size:13px}.pill.on{border:1px solid " + AC + ";color:" + AC + ";background:rgba(" + ACrgb + ",.07)}.srcs{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px;margin-bottom:22px}.src{display:flex;gap:10px;align-items:center;background:rgba(255,255,255,.04);border:1px solid " + DT.line + ";border-radius:14px;padding:12px 14px}.src i{width:9px;height:9px;border-radius:50%;background:" + AC + ";flex:none}.src b{display:block;font-size:13px}.src span{color:" + DT.mute + ";font-size:11px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(480px,1fr));gap:16px}.card{background:rgba(255,255,255,.04);border:1px solid " + DT.line + ";border-radius:18px;padding:18px;overflow:hidden}.card h3{margin:0 0 12px;font-size:16px}.kpis{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:10px}.kpi{background:rgba(" + ACrgb + ",.1);border:1px solid rgba(" + ACrgb + ",.3);border-radius:12px;padding:10px 16px}.kpi b{display:block;font-size:26px;color:" + AC + "}.kpi span{font-size:11px;color:" + DT.mute + "}.chart svg{width:100%;height:auto}table{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px}th{color:" + DT.mute + ";text-align:left;font-weight:600;font-size:10px;letter-spacing:.06em;text-transform:uppercase;border-bottom:1px solid " + DT.line + ";padding:6px 8px}td{padding:6px 8px;border-bottom:1px solid rgba(44,56,93,.6)}td.n{text-align:right;font-variant-numeric:tabular-nums}.more{color:" + DT.mute + ";font-size:11px;margin-top:6px}footer{margin-top:28px;color:" + DT.mute + ";font-size:11px}@media print{body{background:" + DT.navy + ";-webkit-print-color-adjust:exact;print-color-adjust:exact}}@media(max-width:560px){.grid{grid-template-columns:1fr}h1{font-size:28px}}";
+        return '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' + dtEsc(title) + "</title><style>" + css + "</style></head><body><div class=\"wrap\"><header><img src=\"" + DATORE_LOGO + "\" alt=\"datore\"><div class=\"meta\">" + dtEsc(client || "") + " · " + stamp + "</div></header><h1>" + dtHeadline(title) + "</h1><p class=\"sub\">Every number below comes from your trusted data and follows your access limits.</p><div class=\"srcs\">" + summary + '</div><div class="grid">' + cards + "</div><footer>Created by SAMM for " + dtEsc(client || "your organisation") + ". Figures are as calculated at " + stamp + ".</footer></div></body></html>";
       }
 
-      function buildPackage(tool, title, client, tiles) {
-        if (tool === "html") return new Blob([reportHtml(title, client, tiles)], { type: "text/html" });
+      function buildPackage(tool, title, client, tiles, accent) {
+        if (tool === "html") return new Blob([reportHtml(title, client, tiles, accent)], { type: "text/html" });
         const used = []; const stamp = new Date().toISOString().slice(0, 16).replace("T", " ") + " UTC";
         const ts = tiles.map((t) => ({ t, name: slug(t.title, used) }));
         const files = ts.map(({ t, name }) => ({ name: "data/" + name + ".csv", content: rowsToCsv(t.rows) }));
@@ -534,11 +543,86 @@
       }
 
 
+      // v24: the chat docks beside a report or the data viewer. The context carries what the chat last answered.
+      const SplitCtx = React.createContext({ open: false, dataset: "", view: "", reportId: "", live: null });
+      const openSplit = (detail) => window.dispatchEvent(new CustomEvent("samm-split-ask", { detail }));
+      const ACCENT_SWATCHES = [["green", "#8ef4b2"], ["blue", "#6ea8ff"], ["violet", "#a78bfa"], ["amber", "#f5b657"], ["orange", "#fb923c"], ["pink", "#f472b6"], ["red", "#f87171"], ["teal", "#5eead4"], ["yellow", "#facc15"], ["white", "#ffffff"]];
+      function parseReportCommand(text) {
+        const t = String(text || "").trim();
+        let m = /^(?:please\s+)?(?:rename|retitle|call|name)\s+(?:the\s+|this\s+|my\s+)?report\s+(?:to\s+|as\s+)?["“'‘]?(.{1,120}?)["”'’]?\s*\.?$/i.exec(t)
+          || /^(?:please\s+)?(?:change|set)\s+(?:the\s+)?(?:report\s+)?(?:name|title)\s+(?:of\s+(?:the|this)\s+report\s+)?to\s+["“'‘]?(.{1,120}?)["”'’]?\s*\.?$/i.exec(t);
+        if (m) return { title: m[1].trim() };
+        if (/^(?:please\s+)?(?:make|change|set|turn|use|switch|paint)\b/i.test(t) && /\b(report|colou?r|accent|theme)\b/i.test(t)) {
+          const hex = /#[0-9a-fA-F]{6}\b/.exec(t);
+          if (hex) return { accent: hex[0] };
+          const w = /\b(green|mint|blue|violet|purple|amber|orange|pink|red|teal|yellow|white|grey|gray)\s*[.!]?\s*$/i.exec(t);
+          if (w) return { accent: w[1].toLowerCase() };
+        }
+        return null;
+      }
+      function SplitChat({ messages, since, isLoading, input, setInput, onSend, onClose, label, reportId, onAdd, onOpenArtifact }) {
+        const [added, setAdded] = useState({});
+        const [err, setErr] = useState("");
+        const endRef = useRef(null);
+        useEffect(() => { if (endRef.current && endRef.current.scrollIntoView) endRef.current.scrollIntoView({ block: "end" }); }, [messages.length, isLoading]);
+        const shown = messages.slice(Math.max(since - 1, 0));
+        const add = async (m) => {
+          setErr("");
+          try { await onAdd(m); setAdded((a) => ({ ...a, [m.id]: true })); } catch (e) { setErr((e && e.message) || "Could not add that to the report."); }
+        };
+        return (
+          <aside data-testid="split-chat" className="fixed md:static inset-y-0 right-0 z-40 w-full sm:w-[420px] md:w-[400px] shrink-0 flex flex-col bg-[#1A1A1A] border-l border-[#2D2D2D] shadow-2xl">
+            <div className="h-14 px-4 flex items-center justify-between border-b border-[#2D2D2D]">
+              <div className="min-w-0"><div className="text-sm font-bold text-white">Ask SAMM</div><div className="text-[10px] text-amber-500 font-mono truncate" data-testid="split-scope">About: {label}</div></div>
+              <button data-testid="split-close" onClick={onClose} aria-label="Close chat panel" className="border border-[#3D3D3D] hover:border-amber-500 text-white text-xs px-2 py-1 rounded">Close ✕</button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-3 space-y-3">
+              {shown.length === 0 && <div className="text-xs text-[#A0A0A0]">Ask a question about this data. The table on the left shows what you asked for.</div>}
+              {shown.map((m) => (
+                <div key={m.id} data-testid="split-msg" className={"rounded-lg p-3 text-sm " + (m.role === "user" ? "bg-amber-600 text-white ml-8" : "bg-[#222222] border border-[#2D2D2D] mr-2")}>
+                  {m.error ? <div className="text-red-300 text-xs">{m.error.message}</div> : <MessageBody msg={m} onOpenArtifact={onOpenArtifact} />}
+                  {m.role === "assistant" && !m.error && Array.isArray(m.rows) && m.rows.length > 0 && (
+                    <>
+                      <ResultTable rows={m.rows} />
+                      {reportId && (
+                        <button data-testid="add-to-report" disabled={!!added[m.id]} onClick={() => add(m)} className="mt-2 text-xs border border-[#8ef4b2]/60 text-[#8ef4b2] hover:bg-[#8ef4b2]/10 px-2 py-1 rounded disabled:opacity-60">{added[m.id] ? "Added to report ✓" : "Add to report"}</button>
+                      )}
+                    </>
+                  )}
+                </div>
+              ))}
+              {isLoading && <div className="text-xs font-mono text-[#A0A0A0] animate-pulse">SAMM is working...</div>}
+              {err && <div className="text-[11px] text-amber-200">{err}</div>}
+              <div ref={endRef} />
+            </div>
+            <form onSubmit={(e) => { e.preventDefault(); onSend(input.trim()); }} className="border-t border-[#2D2D2D] p-3 flex gap-2">
+              <input aria-label="Ask a question" data-testid="split-input" value={input} onChange={(e) => setInput(e.target.value)} disabled={isLoading} placeholder={reportId ? "Ask, or: make the report blue" : "Ask about this data..."} className="flex-1 bg-[#2D2D2D] border border-[#3D3D3D] rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-amber-500 disabled:opacity-50" />
+              <button type="submit" disabled={isLoading || !input.trim()} className="bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-bold text-sm px-4 rounded-lg">Send</button>
+            </form>
+          </aside>
+        );
+      }
+
       function ReportView({ doc, api, client, onBack, onChanged, onAsk }) {
         const [cur, setCur] = useState(doc);
         const [busy, setBusy] = useState(false);
         const [msg, setMsg] = useState("");
         useEffect(() => setCur(doc), [doc]);
+        const AC = /^#[0-9a-fA-F]{6}$/.test(cur.accent || "") ? cur.accent : DT.mint;
+        const [ren, setRen] = useState(null);
+        const [hiers, setHiers] = useState([]);
+        const [drillName, setDrillName] = useState("");
+        useEffect(() => { let on = true; api({ action: "links_list" }).then((r) => { if (on) setHiers(r.hierarchies || []); }).catch(() => { /* older back end: no drill-downs */ }); return () => { on = false; }; }, [cur.client]);
+        useEffect(() => { window.dispatchEvent(new CustomEvent("samm-report-opened", { detail: { id: cur.id, title: cur.title, accent: cur.accent || "" } })); }, [cur.id, cur.title, cur.accent]);
+        useEffect(() => {
+          const on = (e) => { const r = e.detail && e.detail.report; if (r && r.id === cur.id) { setCur(r); if (onChanged) onChanged(); } };
+          window.addEventListener("samm-report-updated", on);
+          return () => window.removeEventListener("samm-report-updated", on);
+        }, [cur.id]);
+        const update = async (patch) => {
+          setBusy(true); setMsg("");
+          try { const r = await api({ action: "report_update", id: cur.id, ...patch }); setCur(r.report); setRen(null); if (onChanged) onChanged(); } catch (e) { setMsg(e.message || "Could not update the report."); } finally { setBusy(false); }
+        };
         const link = reportLink(cur.id, cur.client || client);
         const refresh = async () => {
           setBusy(true); setMsg("");
@@ -551,24 +635,42 @@
               <img src={DATORE_LOGO} alt="datore" className="h-8" />
               <span className="text-[11px] text-[#78869b]">{cur.client || client} · updated {String(cur.updated || cur.created || "").slice(0, 16).replace("T", " ")} UTC · by {cur.by}</span>
             </div>
-            <h2 data-testid="report-title" className="text-3xl md:text-4xl font-extrabold text-white tracking-tight" dangerouslySetInnerHTML={{ __html: dtHeadline(cur.title).replace('class="hl"', 'class="text-[#8ef4b2]"') }} />
+            <h2 data-testid="report-title" className="text-3xl md:text-4xl font-extrabold text-white tracking-tight" dangerouslySetInnerHTML={{ __html: dtHeadline(cur.title).replace('class="hl"', 'style="color:' + AC + '"') }} />
+            <div data-testid="report-style" className="flex flex-wrap items-center gap-2 text-xs">
+              {ren === null ? <button data-testid="report-rename" onClick={() => setRen(cur.title)} className="underline text-[#b8c2d6] hover:text-white">Rename</button> : (
+                <span className="flex items-center gap-2">
+                  <input data-testid="report-rename-input" aria-label="Report name" value={ren} maxLength={120} onChange={(e) => setRen(e.target.value)} className="bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-white w-64 focus:outline-none" />
+                  <button data-testid="report-rename-save" disabled={busy || !ren.trim()} onClick={() => update({ title: ren })} className="bg-[#8ef4b2] text-[#13214a] font-bold px-3 py-1 rounded disabled:opacity-50">Save</button>
+                  <button onClick={() => setRen(null)} className="text-[#b8c2d6] underline">Cancel</button>
+                </span>
+              )}
+              <span className="text-[#78869b]">Colour</span>
+              {ACCENT_SWATCHES.map(([n, hex]) => <button key={n} data-testid={"report-color-" + n} title={n} aria-label={"Colour " + n} onClick={() => update({ accent: hex })} className="w-5 h-5 rounded-full border-2" style={{ background: hex, borderColor: hex === AC ? "#fff" : "transparent" }} />)}
+            </div>
             <div className="flex flex-wrap gap-2">
               <button onClick={onBack} className={bt} data-testid="report-back">← All reports</button>
               {cur.kind === "dataset" && <button onClick={refresh} disabled={busy} className={bt} data-testid="report-refresh">{busy ? "Refreshing..." : "Refresh numbers"}</button>}
               <button onClick={() => { try { navigator.clipboard.writeText(link); setMsg("Link copied."); } catch (_) { setMsg(link); } }} className={bt} data-testid="report-copy">Copy link</button>
-              <button onClick={() => downloadBlob("samm-report-" + String(cur.title || "report").replace(/[^A-Za-z0-9]+/g, "_").slice(0, 30) + ".html", new Blob([reportHtml(cur.title, cur.client || client, cur.tiles || [])], { type: "text/html" }))} className={bt} data-testid="report-download">Download page</button>
-              {cur.dataset && <button onClick={() => onAsk && onAsk(cur.dataset)} className={bt}>Ask about this data</button>}
+              <button onClick={() => downloadBlob("samm-report-" + String(cur.title || "report").replace(/[^A-Za-z0-9]+/g, "_").slice(0, 30) + ".html", new Blob([reportHtml(cur.title, cur.client || client, cur.tiles || [], cur.accent)], { type: "text/html" }))} className={bt} data-testid="report-download">Download page</button>
+              {hiers.length > 0 && (
+                <select aria-label="Drill down" data-testid="report-drill" value={drillName} onChange={(e) => setDrillName(e.target.value)} className="bg-[#1b2a55] border border-[#2c385d] text-white text-xs rounded-lg px-2 py-1.5">
+                  <option value="">Drill down...</option>{hiers.map((h) => <option key={h.name} value={h.name}>{h.name}</option>)}
+                </select>
+              )}
+              {cur.dataset && <button data-testid="report-ask" onClick={() => openSplit({ dataset: cur.dataset, reportId: cur.id })} className={bt}>Ask SAMM</button>}
             </div>
             {msg && <div data-testid="report-msg" className="text-[11px] text-[#8ef4b2]">{msg}</div>}
+            {drillName && <DrillView api={api} name={drillName} reportId={cur.id} onClose={() => setDrillName("")} />}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               {(cur.tiles || []).map((t, i) => {
                 const single = t.rows.length === 1 ? Object.keys(t.rows[0]).filter((c) => numOf(t.rows[0][c]) !== null).slice(0, 4) : [];
                 return (
                   <div key={i} data-testid="report-tile" className="bg-white/5 border border-[#2c385d] rounded-2xl p-4 space-y-2 min-w-0">
                     <div className="text-sm font-bold text-white">{t.title}</div>
-                    {single.length > 0 && <div className="flex flex-wrap gap-3">{single.map((c) => <div key={c} className="bg-[#8ef4b2]/10 border border-[#8ef4b2]/30 rounded-xl px-4 py-2"><div className="text-2xl font-extrabold text-[#8ef4b2]">{fmtNum(numOf(t.rows[0][c]))}</div><div className="text-[11px] text-[#78869b]">{c}</div></div>)}</div>}
-                    <AutoChart rows={t.rows} title={t.title} />
+                    {single.length > 0 && <div className="flex flex-wrap gap-3">{single.map((c) => <div key={c} className="bg-[#8ef4b2]/10 border border-[#8ef4b2]/30 rounded-xl px-4 py-2"><div className="text-2xl font-extrabold" style={{ color: AC }}>{fmtNum(numOf(t.rows[0][c]))}</div><div className="text-[11px] text-[#78869b]">{c}</div></div>)}</div>}
+                    {t.chart !== false && <AutoChart rows={t.rows} title={t.title} />}
                     <DataTable rows={t.rows.slice(0, 8)} />
+                    <button data-testid="tile-remove-report" onClick={() => update({ remove_tile: i })} className="text-[10px] text-[#78869b] hover:text-white underline">Remove tile</button>
                   </div>
                 );
               })}
@@ -619,11 +721,6 @@
             <div>
               <h2 data-testid="dt-headline" className="text-3xl md:text-4xl font-extrabold text-white tracking-tight">Every number. <span className="text-[#8ef4b2]">One place.</span></h2>
               <p className="text-xs text-[#b8c2d6] mt-2">Pin any chart from the chat. Tiles are saved in this browser. Refresh re-asks the question, so the numbers are always live and follow your role's limits.</p>
-            </div>
-            <div className="flex flex-wrap gap-2" data-testid="dt-layers">
-              {[["Collected", "Bronze", false], ["Cleaned", "Silver", false], ["Trusted", "Gold", true]].map(([a, b, on]) => (
-                <div key={b} className={"rounded-xl px-4 py-2 text-[11px] border " + (on ? "border-[#8ef4b2] text-[#8ef4b2] bg-[#8ef4b2]/10" : "border-dashed border-[#2c385d] text-[#78869b]")}><b className={"block text-[13px] " + (on ? "text-[#8ef4b2]" : "text-white")}>{a}</b>{b}</div>
-              ))}
             </div>
             {tiles.length > 0 && (
               <div className="grid grid-cols-2 md:grid-cols-4 gap-2" data-testid="dt-sources">
@@ -947,7 +1044,16 @@
       // ------------------------------------------------------------------
       // Data Onboarding hub (live): upload -> Bronze -> Silver -> field mapping -> Gold view
       // ------------------------------------------------------------------
+      function fmtWhen(iso) {
+        if (!iso) return "";
+        const d = new Date(iso);
+        if (isNaN(d.getTime())) return String(iso).slice(0, 16).replace("T", " ");
+        const p = (n) => String(n).padStart(2, "0");
+        return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
+      }
+      function titleOf(view) { const t = (window.__sammTitles || {})[view]; return t && t.title ? t.title : ""; }
       function friendlyView(v, tenant) {
+        if (titleOf(v)) return titleOf(v);
         let n = String(v || "").replace(/^gold_ai_/, "");
         if (tenant && n.toLowerCase().startsWith(String(tenant).toLowerCase() + "__")) n = n.slice(String(tenant).length + 2);
         n = n.replace(/^[A-Za-z0-9\-]+__/, "").replace(/_+/g, " ").trim();
@@ -956,22 +1062,22 @@
       const STAGES = [["upload", "Upload"], ["bronze", "Bronze"], ["silver", "Silver"], ["map", "Map fields"], ["gold", "Gold view"]];
       const ACCEPT = ".xlsx,.xlsm,.csv,.tsv,.json,.jsonl,.txt,.pdf,.docx,.pptx,.png,.jpg,.jpeg,.xml,.parquet,.zip,.md,.log";
 
-      async function putFile(url, file) {
-        let res;
-        try {
-          res = await fetch(url, { method: "PUT", body: file });
-        } catch (_) {
-          throw new ApiError("The browser could not upload the file to S3.", [
-            "The S3 bucket needs a CORS rule that allows PUT from this site (" + window.location.origin + "). Run deploy_samm.py again with --origin set to this address.",
-            "The upload link lasts 15 minutes; try again if it expired.",
-          ], 0);
-        }
-        if (!res.ok) {
-          throw new ApiError("S3 refused the upload (HTTP " + res.status + ").", [
-            "The upload link may have expired; try again.",
-            "The SAMM Lambda role must be allowed to write to the bucket (s3:PutObject).",
-          ], res.status);
-        }
+      function putFile(url, file, onProgress) {
+        const corsHelp = [
+          "The S3 bucket needs a CORS rule that allows PUT from this site (" + window.location.origin + "). Run deploy_samm.py again with --origin set to this address.",
+          "The upload link lasts 15 minutes; try again if it expired.",
+        ];
+        return new Promise((resolve, reject) => {
+          const x = new XMLHttpRequest();
+          x.open("PUT", url);
+          x.upload.onprogress = (e) => { if (onProgress && e.lengthComputable && e.total) onProgress(Math.min(100, Math.round((e.loaded / e.total) * 100))); };
+          x.onerror = () => reject(new ApiError("The browser could not upload the file to S3.", corsHelp, 0));
+          x.onload = () => {
+            if (x.status >= 200 && x.status < 300) { if (onProgress) onProgress(100); resolve(); return; }
+            reject(new ApiError("S3 refused the upload (HTTP " + x.status + ").", ["The upload link may have expired; try again.", "The SAMM Lambda role must be allowed to write to the bucket (s3:PutObject)."], x.status));
+          };
+          x.send(file);
+        });
       }
 
       function ErrBox({ err }) {
@@ -1224,20 +1330,27 @@
         const failed = job.status === "failed";
         const hasDs = ds.length > 0;
         const allDone = hasDs && ds.every((d) => d.state === "done");
-        const mapPct = job.status === "done" || allDone ? 100 : (auto + open) > 0 ? Math.round((auto / (auto + open)) * 100) : (hasDs ? 0 : null);
+        const inReview = ds.some((d) => d.state === "review" && !(d.queue || []).length);
+        const mapPct = job.status === "done" || allDone ? 100 : inReview ? 50 : (auto + open) > 0 ? Math.round((auto / (auto + open)) * 100) : (hasDs ? 0 : null);
         const waiting = ds.some((d) => d.state === "approval" || d.state === "review");
         const st = (n) => n;
         const silverDone = hasDs;
         const mapDone = allDone || job.status === "done";
         const goldDone = job.status === "done" || allDone;
         const cur = failed ? -1 : goldDone ? 5 : mapDone ? 4 : silverDone ? 3 : 2;   // index of the stage in progress
-        return { pct: mapPct, auto, open, waiting, failed, cur,
+        const overall = failed ? Math.max(job.progress || 0, 5) : goldDone ? 100 : mapDone ? 90 : silverDone ? 40 + Math.round(((mapPct || 0) / 100) * 45) : (job.progress >= 25 ? 35 : 25);
+        const label = failed ? "Stopped with an error" : goldDone ? "Done" : mapDone ? "Building the Gold view" : inReview ? "Waiting for your review" : open > 0 ? "Waiting for your confirmation" : silverDone ? "Mapping fields" : "Converting to Silver";
+        return { pct: mapPct, inReview, overall, label, auto, open, waiting, failed, cur,
           stages: [["Upload", true], ["Bronze", true], ["Silver", silverDone], ["Map fields", mapDone], ["Gold view", goldDone]] };
       }
       function StageTracker({ job }) {
         const j = jobStages(job);
         return (
           <div data-testid="stage-tracker" className="space-y-2">
+            <div data-testid="overall-progress" className="space-y-1">
+              <div className="flex justify-between text-[11px] font-mono text-[#C0C0C0]"><span>{j.label}</span><span>{j.overall}%</span></div>
+              <div className="h-2 bg-[#2D2D2D] rounded"><div className={"h-2 rounded transition-all duration-500 " + (j.failed ? "bg-red-600" : j.overall >= 100 ? "bg-green-500" : "bg-amber-500")} style={{ width: j.overall + "%" }} /></div>
+            </div>
             <div className="flex flex-wrap gap-2 text-[11px] font-mono">
               {j.stages.map(([label, done], n) => (
                 <span key={label} data-testid={"stage-" + label.split(" ")[0].toLowerCase()} className={"px-2 py-1 rounded border " + (done ? "border-green-700 text-green-300" : n === j.cur && !j.failed ? "border-amber-500 text-amber-300" : j.failed && n === j.cur ? "border-red-700 text-red-300" : "border-[#333] text-[#707070]")}>
@@ -1249,9 +1362,9 @@
               <div data-testid="mapped-pct" className="space-y-1">
                 <div className="flex justify-between text-[11px] font-mono text-[#C0C0C0]">
                   <span>Fields mapped</span>
-                  <span>{j.pct}%{j.open > 0 ? " · " + j.open + " need" + (j.open === 1 ? "s" : "") + " your confirmation" : ""}</span>
+                  <span>{j.inReview ? "needs your review" : j.pct + "%"}{j.open > 0 ? " · " + j.open + " need" + (j.open === 1 ? "s" : "") + " your confirmation" : ""}</span>
                 </div>
-                <div className="h-1.5 bg-[#2D2D2D] rounded"><div className="h-1.5 rounded bg-emerald-500" style={{ width: j.pct + "%" }} /></div>
+                <div className="h-1.5 bg-[#2D2D2D] rounded"><div className={"h-1.5 rounded " + (j.inReview ? "bg-amber-500" : "bg-emerald-500")} style={{ width: j.pct + "%" }} /></div>
               </div>
             )}
           </div>
@@ -1274,7 +1387,12 @@
           </div>
         );
       }
-      function DataViewer({ api, dataset }) {
+      function DataViewer({ api, dataset, view }) {
+        const ctx = React.useContext(SplitCtx);
+        const [showAll, setShowAll] = useState(false);
+        const sameSet = (a, b) => String(a || "").replace(/^silver_/, "") === String(b || "").replace(/^silver_/, "");
+        const liveOn = ctx.open && !ctx.reportId && sameSet(ctx.dataset, dataset) && ctx.live;
+        useEffect(() => { setShowAll(false); }, [ctx.live && ctx.live.id]);
         const [layer, setLayer] = useState("gold");
         const [res, setRes] = useState({});
         const [busy, setBusy] = useState(false);
@@ -1294,9 +1412,17 @@
                 <button key={l} data-testid={"layer-" + l} onClick={() => load(l)} className={"px-2 py-1 rounded border " + (layer === l ? "border-amber-500 text-amber-300" : "border-[#3D3D3D] text-[#A0A0A0] hover:text-white")}>{label}</button>
               ))}
               {busy && <span className="text-[#808080]">Loading...</span>}
+              <button data-testid="data-ask" onClick={() => openSplit({ dataset, view })} className="ml-auto px-2 py-1 rounded border border-amber-500/60 text-amber-300 hover:bg-amber-500/10">Ask SAMM</button>
             </div>
+            {liveOn && !showAll && (
+              <div data-testid="live-banner" className="flex flex-wrap items-center gap-2 text-[11px] text-[#8ef4b2]">
+                <span>Showing: {liveOn.question || "your last question"}</span>
+                <button data-testid="show-all-data" onClick={() => setShowAll(true)} className="underline text-amber-300">Show all data</button>
+              </div>
+            )}
+            {liveOn && !showAll && <div data-testid="live-table"><DataTable rows={liveOn.rows} /></div>}
             {cur && cur.error && <div data-testid="peek-error" className="text-xs text-amber-200">{cur.error}</div>}
-            {cur && !cur.error && (
+            {cur && !cur.error && !(liveOn && !showAll) && (
               <>
                 <div data-testid="peek-meta" className="text-[11px] text-[#A0A0A0]">
                   {cur.file ? cur.file + " · " : ""}{cur.total != null ? Number(cur.total).toLocaleString() + " rows" : ""}{(cur.rows || []).length ? " · showing the first " + cur.rows.length : ""}{cur.note ? " · " + cur.note : ""}
@@ -1309,6 +1435,19 @@
       }
       function DatasetTools({ api, dataset, view, client, onAsk }) {
         const [show, setShow] = useState(false);
+        const [ren, setRen] = useState({ open: false, title: "", subject: "", busy: false, err: null });
+        const cur0 = (window.__sammTitles || {})[view] || {};
+        const [shown, setShown] = useState(cur0);
+        const saveTitle = async () => {
+          setRen((r) => ({ ...r, busy: true, err: null }));
+          try {
+            const r = await api({ action: "dataset_rename", dataset, title: ren.title, subject: ren.subject });
+            const next = r.title ? { title: r.title, subject: r.subject || "" } : {};
+            window.__sammTitles = { ...(window.__sammTitles || {}) }; if (r.title) window.__sammTitles[view] = next; else delete window.__sammTitles[view];
+            setShown(next); setRen({ open: false, title: "", subject: "", busy: false, err: null });
+            window.dispatchEvent(new CustomEvent("samm-titles-changed"));
+          } catch (e) { setRen((x) => ({ ...x, busy: false, err: e })); }
+        };
         const [pub, setPub] = useState({ busy: false, doc: null, err: null, copied: false });
         const publish = async () => {
           setPub({ busy: true, doc: null, err: null, copied: false });
@@ -1318,11 +1457,26 @@
         const link = pub.doc ? reportLink(pub.doc.id, pub.doc.client || client) : "";
         return (
           <div className="space-y-2" data-testid="dataset-tools">
+            {(shown.title || ren.open) && !ren.open && <div data-testid="dataset-title" className="text-xs text-white"><span className="font-semibold">{shown.title}</span>{shown.subject ? <span className="text-[#A0A0A0]"> · {shown.subject}</span> : null}</div>}
             <div className="flex flex-wrap gap-3 text-xs font-mono">
+              <button data-testid="rename-dataset" onClick={() => setRen({ open: !ren.open, title: shown.title || "", subject: shown.subject || "", busy: false, err: null })} className="underline text-amber-400 hover:text-amber-300">Rename</button>
               <button data-testid="view-data" onClick={() => setShow((v) => !v)} className="underline text-amber-400 hover:text-amber-300">{show ? "Hide data" : "View data (Bronze · Silver · Gold)"}</button>
               <button data-testid="publish-report" onClick={publish} disabled={pub.busy} className="underline text-amber-400 hover:text-amber-300 disabled:opacity-50">{pub.busy ? "Publishing..." : "Publish report"}</button>
             </div>
-            {show && <DataViewer api={api} dataset={dataset} />}
+            {ren.open && (
+              <div data-testid="rename-form" className="border border-[#2D2D2D] rounded-lg p-3 bg-[#1B1B1B] space-y-2 text-xs">
+                <div className="text-[#C0C0C0]">Give this dataset a clear title, for example the client and what it holds. The title is what you and your team see; the technical name does not change.</div>
+                <div className="flex flex-wrap gap-2">
+                  <input aria-label="Dataset title" value={ren.title} maxLength={80} onChange={(e) => setRen({ ...ren, title: e.target.value })} placeholder="Landsec - Lift purchase orders" className="flex-1 min-w-[240px] bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-white focus:outline-none focus:border-amber-500" />
+                  <input aria-label="Dataset subject" value={ren.subject} maxLength={60} onChange={(e) => setRen({ ...ren, subject: e.target.value })} placeholder="Subject (optional), e.g. Purchase orders" className="w-64 bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-white focus:outline-none focus:border-amber-500" />
+                  <button data-testid="save-title" onClick={saveTitle} disabled={ren.busy} className="bg-amber-600 hover:bg-amber-500 text-white font-bold px-3 py-1 rounded-md disabled:opacity-50">{ren.busy ? "Saving..." : "Save"}</button>
+                  <button onClick={() => setRen({ ...ren, open: false })} className="border border-[#3D3D3D] text-white px-3 py-1 rounded-md">Cancel</button>
+                </div>
+                <div className="text-[10px] text-[#808080]">Leave the title empty and press Save to go back to the original name.</div>
+                <ErrBox err={ren.err} />
+              </div>
+            )}
+            {show && <DataViewer api={api} dataset={dataset} view={view} />}
             <ErrBox err={pub.err} />
             {pub.doc && (
               <div data-testid="published" className="border border-green-800 bg-[#10241A] rounded-lg p-3 space-y-2 text-xs">
@@ -1387,9 +1541,7 @@
             <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono">
               <span className="px-2 py-0.5 rounded bg-[#333] text-[#BBB]">{job.source === "screen" ? "from this screen" : "back-end drop"}</span>
               <span data-testid="job-status" className={job.status === "failed" ? "text-red-300" : job.status === "done" ? "text-green-300" : "text-amber-300"}>{JOB_STATUS[job.status] || job.status}</span>
-              <span className="text-[#707070]">{job.progress}%</span>
             </div>
-            <div className="h-1.5 bg-[#2D2D2D] rounded"><div className={"h-1.5 rounded " + bar} style={{ width: job.progress + "%" }} /></div>
             {gone && (
               <div data-testid="job-gone" className="text-xs text-amber-200 bg-[#2A2418] border border-amber-900 rounded-lg p-3 flex flex-wrap items-center gap-3">
                 <span>This job is no longer available (it may belong to another client or have expired). If you still need the file, upload it again.</span>
@@ -1401,7 +1553,7 @@
             {Object.entries(job.datasets || {}).map(([ds, d]) => (
               <div key={ds} className="space-y-2">
               <div className="text-xs font-mono flex flex-wrap gap-3 items-center">
-                <span className="text-amber-400">{ds}</span>
+                <span className="text-amber-400" title={ds}>{(d.view && titleOf(d.view)) || ds}</span>
                 <span className="text-[#A0A0A0]">{d.state}</span>
                 {d.view && <span className="text-green-300">→ {d.view}</span>}
                 {d.view && <button onClick={() => onAsk(d.view)} className="underline text-amber-400 hover:text-amber-300">Ask about it</button>}
@@ -1569,7 +1721,7 @@
             {(rows || []).map((d) => (
               <div key={d.dataset} data-testid="gold-row" className="border border-[#2D2D2D] rounded-lg p-3 bg-[#1D1D1D] space-y-2">
                 <div className="flex flex-wrap items-center gap-3 text-xs">
-                  <span className="font-mono text-amber-400">{d.view}</span>
+                  <span className="font-mono text-amber-400" title={d.view}>{d.title || d.view}</span>
                   <span className="text-[#808080]">owner {d.owner || "none"}{d.built_at ? " · built " + String(d.built_at).slice(0, 10) : ""}</span>
                   {d.rules && d.rules.active > 0 && <span className="text-[#A0A0A0]">{d.rules.active} rule(s) active</span>}
                   <button onClick={() => onAsk(d.view)} className="underline text-amber-400 hover:text-amber-300">Ask about it</button>
@@ -1583,11 +1735,249 @@
         );
       }
 
+      // v24: drill-down through tables that belong together, and the screen where links are found, checked and approved.
+      function DrillView({ api, name, reportId, onClose, onAdded }) {
+        const [stack, setStack] = useState([]);              // chosen values so far: [{ key, label }]
+        const [data, setData] = useState(null);
+        const [busy, setBusy] = useState(false);
+        const [err, setErr] = useState(null);
+        const [note, setNote] = useState("");
+        const load = async (path, first) => {
+          setBusy(true); setErr(null); setNote("");
+          try { const r = await api({ action: "drill_query", name, depth: path.length, path: path.map((p) => p.key), check: !!first }); setData(r); setStack(path); }
+          catch (e) { setErr(e); } finally { setBusy(false); }
+        };
+        useEffect(() => { load([], true); }, [name]);
+        const nf = (v) => { const n = Number(v); return v === null || v === undefined || v === "" || isNaN(n) ? String(v ?? "") : n.toLocaleString(undefined, { maximumFractionDigits: 2 }); };
+        const crumbs = data ? data.levels.map((l, i) => ({ i, label: l.label })) : [];
+        const addToReport = async () => {
+          if (!data || !reportId) return;
+          const where = stack.map((s) => s.label || s.key).join(" › ");
+          const rows = data.rows.map((r) => { const o = {}; Object.keys(r).forEach((k) => { if (k !== "key") o[k === "label" ? data.levels[data.depth].label : k] = r[k]; }); return o; });
+          try {
+            const r = await api({ action: "report_update", id: reportId, add_tile: { title: (name + (where ? ": " + where : "")).slice(0, 120), rows, chart: !data.final, at: new Date().toLocaleTimeString() } });
+            window.dispatchEvent(new CustomEvent("samm-report-updated", { detail: { report: r.report } })); setNote("Added to the report."); if (onAdded) onAdded();
+          } catch (e) { setErr(e); }
+        };
+        const totalCols = data && !data.final && data.rows[0] ? Object.keys(data.rows[0]).filter((k) => k.indexOf("total_") === 0) : [];
+        return (
+          <div data-testid="drill-view" className="border border-[#2c385d] rounded-2xl p-4 bg-white/5 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="text-sm font-bold text-white">Drill down · {name}</div>
+              <button onClick={onClose} className="text-xs border border-[#3D3D3D] hover:border-amber-500 text-white px-2 py-1 rounded">Close ✕</button>
+            </div>
+            <div data-testid="drill-crumbs" className="flex flex-wrap items-center gap-1 text-xs">
+              {crumbs.map((c) => (
+                <span key={c.i} className="flex items-center gap-1">
+                  {c.i > 0 && <span className="text-[#78869b]">›</span>}
+                  {data && c.i < data.depth ? <button data-testid="crumb" onClick={() => load(stack.slice(0, c.i), c.i === 0)} className="underline text-[#8ef4b2]">{c.label}{stack[c.i] ? ": " + (stack[c.i].label || stack[c.i].key) : ""}</button>
+                    : <span className={data && c.i === data.depth ? "text-white font-bold" : "text-[#78869b]"}>{c.label}</span>}
+                </span>
+              ))}
+              {busy && <span className="text-[#78869b] ml-2">Loading...</span>}
+            </div>
+            <ErrBox err={err} />
+            {data && !data.final && (
+              <div className="overflow-auto max-h-96 border border-[#2D2D2D] rounded-lg">
+                <table className="w-full text-[11px] font-mono">
+                  <thead><tr><th className="text-left text-amber-400 px-2 py-1 sticky top-0 bg-[#1D1D1D]">{data.levels[data.depth].label}</th><th className="text-right text-amber-400 px-2 py-1 sticky top-0 bg-[#1D1D1D]">Rows</th>
+                    {totalCols.map((c) => <th key={c} className="text-right text-amber-400 px-2 py-1 sticky top-0 bg-[#1D1D1D] whitespace-nowrap">{c.replace("total_", "Total ")}</th>)}</tr></thead>
+                  <tbody>{data.rows.map((r, i) => (
+                    <tr key={i} data-testid="drill-row" onClick={() => r.key && load(stack.concat([{ key: r.key, label: r.label }]))} className={"border-t border-[#2D2D2D] " + (r.key ? "cursor-pointer hover:bg-white/5" : "opacity-70")}>
+                      <td className="px-2 py-1 text-white">{r.key ? (r.label || r.key) : "(no match)"} {r.key && <span className="text-[#78869b]">›</span>}</td>
+                      <td className="px-2 py-1 text-right">{nf(r.rows)}</td>
+                      {totalCols.map((c) => <td key={c} className="px-2 py-1 text-right">{nf(r[c])}</td>)}
+                    </tr>))}</tbody>
+                </table>
+              </div>
+            )}
+            {data && data.final && <DataTable rows={data.rows} />}
+            {data && data.rows.length === 0 && <div className="text-xs text-[#78869b]">Nothing at this level.</div>}
+            <div className="flex flex-wrap items-center gap-3 text-xs">
+              {reportId && data && <button data-testid="drill-add" onClick={addToReport} className="border border-[#8ef4b2]/60 text-[#8ef4b2] hover:bg-[#8ef4b2]/10 px-2 py-1 rounded">Add this view to the report</button>}
+              {note && <span className="text-[#8ef4b2]">{note}</span>}
+              <span className="text-[#78869b]">Totals come from the lowest table, so nothing is counted twice. Only approved links are used.</span>
+            </div>
+          </div>
+        );
+      }
+
+      function LinkStats({ link }) {
+        const st = link.stats; if (!st) return null;
+        const pct = Math.round((st.match || 0) * 100);
+        return (
+          <div data-testid="link-stats" className="mt-2 text-[11px] space-y-1">
+            <div className="flex flex-wrap gap-2">
+              <span className={"px-2 py-0.5 rounded-full border " + (st.hint === "strong" ? "border-green-700 text-green-300" : st.hint === "check" ? "border-amber-600 text-amber-300" : "border-red-800 text-red-300")} data-testid="link-match">{pct}% match</span>
+              <span className="px-2 py-0.5 rounded-full border border-[#3D3D3D] text-[#C0C0C0]" data-testid="link-relation">{st.relation}</span>
+              <span className="text-[#A0A0A0]">{(st.shared || 0).toLocaleString()} shared value(s) · {(st.orphans_a || 0).toLocaleString()} only in the first · {(st.orphans_b || 0).toLocaleString()} only in the second</span>
+            </div>
+            {(st.warnings || []).map((w, i) => <div key={i} data-testid="link-warning" className="text-amber-200">⚠ {w}</div>)}
+            {(link.orphan_sample || []).length > 0 && <div className="text-[#A0A0A0]">Values with no match, for example: {link.orphan_sample.join(", ")}</div>}
+          </div>
+        );
+      }
+
+      function LinksPanel({ api, role, tableLabel }) {
+        const [open, setOpen] = useState(false);
+        const [busy, setBusy] = useState("");
+        const [err, setErr] = useState(null);
+        const [data, setData] = useState(null);
+        const [prog, setProg] = useState("");
+        const [chain, setChain] = useState(null);       // { levels: [dataset], labels: [..] }
+        const [hname, setHname] = useState("");
+        const [drill, setDrill] = useState("");
+        const label = (ds) => ((data && data.labels && data.labels[ds]) || String(ds).replace(/^silver_/, ""));
+        const load = async () => {
+          setBusy("load"); setErr(null);
+          try {
+            const r = await api({ action: "links_suggest" });
+            const labels = {}; r.candidates.forEach((c) => { labels[c.a.dataset] = c.a_label; labels[c.b.dataset] = c.b_label; });
+            setData({ ...r, labels });
+          } catch (e) { setErr(e); } finally { setBusy(""); }
+        };
+        const merge = (link) => setData((d) => d ? { ...d, candidates: d.candidates.map((c) => c.id === link.id ? { ...c, status: link.status, stats: link.stats, orphan_sample: link.orphan_sample } : c), links: d.links.filter((l) => l.id !== link.id).concat([link]) } : d);
+        const check = async (c) => {
+          setBusy(c.id); setErr(null);
+          try { const r = await api({ action: "links_check", a: c.a, b: c.b }); merge(r.link); } catch (e) { setErr(e); } finally { setBusy(""); }
+        };
+        const checkAll = async () => {
+          const todo = (data.candidates || []).filter((c) => !c.stats);
+          for (let i = 0; i < todo.length; i++) {
+            setProg("Checking " + (i + 1) + " of " + todo.length + "...");
+            try { const r = await api({ action: "links_check", a: todo[i].a, b: todo[i].b }); merge(r.link); } catch (e) { setErr(e); break; }
+          }
+          setProg("");
+        };
+        const decide = async (c, decision) => {
+          setBusy(c.id); setErr(null);
+          try { const r = await api({ action: "links_decide", id: c.id, decision });
+            setData((d) => ({ ...d, candidates: d.candidates.map((x) => x.id === c.id ? { ...x, status: r.link.status } : x), links: d.links.map((l) => l.id === c.id ? r.link : l), hierarchies: r.hierarchies_removed ? (d.hierarchies || []).filter((h) => true) : d.hierarchies }));
+            if (r.hierarchies_removed) load();
+          } catch (e) { setErr(e); } finally { setBusy(""); }
+        };
+        const suggest = async () => {
+          setBusy("chain"); setErr(null);
+          try { const r = await api({ action: "drill_suggest" }); setChain(r.chains.length ? r.chains[0] : { levels: [], labels: [] }); setHname(r.chains.length ? r.chains[0].labels.join(" > ") : ""); } catch (e) { setErr(e); } finally { setBusy(""); }
+        };
+        const move = (i, d) => setChain((c) => { const L = c.levels.slice(), B = c.labels.slice(); const j = i + d; if (j < 0 || j >= L.length) return c; [L[i], L[j]] = [L[j], L[i]]; [B[i], B[j]] = [B[j], B[i]]; return { levels: L, labels: B }; });
+        const save = async () => {
+          setBusy("save"); setErr(null);
+          try { const r = await api({ action: "drill_save", name: hname, levels: chain.levels }); setData((d) => ({ ...d, hierarchies: r.hierarchies })); setChain(null); } catch (e) { setErr(e); } finally { setBusy(""); }
+        };
+        const del = async (n) => { try { const r = await api({ action: "drill_delete", name: n }); setData((d) => ({ ...d, hierarchies: r.hierarchies })); } catch (e) { setErr(e); } };
+        // system administrators only: is a table filed under the wrong client?
+        const [mis, setMis] = useState({ ds: "", busy: false, msg: "", verdict: undefined, detail: null, flagged: false });
+        const checkClient = async () => {
+          setMis((m) => ({ ...m, busy: true, msg: "Comparing...", verdict: undefined, flagged: false })); setErr(null);
+          try {
+            const plan = await api({ action: "links_misfile_plan", dataset: mis.ds });
+            let own = null; const others = {}; let n = 0; const total = plan.own.length + Object.values(plan.others).reduce((a, b) => a + b.length, 0);
+            for (const pr of plan.own) { setMis((m) => ({ ...m, msg: "Comparing " + (++n) + " of " + total + "..." })); const r = await api({ action: "links_check", a: pr.a, b: pr.b }); own = Math.max(own || 0, r.link.stats.match_a); }
+            for (const oc of Object.keys(plan.others)) for (const pr of plan.others[oc]) { setMis((m) => ({ ...m, msg: "Comparing " + (++n) + " of " + total + "..." })); const r = await api({ action: "links_probe", a: pr.a, b: pr.b, other: oc }); others[oc] = Math.max(others[oc] || 0, r.match_a); }
+            const v = await api({ action: "links_misfile_verdict", own_best: own, other_best: others });
+            setMis((m) => ({ ...m, busy: false, msg: "", verdict: v.verdict, detail: { own, others } }));
+          } catch (e) { setErr(e); setMis((m) => ({ ...m, busy: false, msg: "" })); }
+        };
+        const flag = async () => { try { await api({ action: "links_misfile_flag", dataset: mis.ds, to: mis.verdict.client }); setMis((m) => ({ ...m, flagged: true })); } catch (e) { setErr(e); } };
+        const canManage = ["engineer", "admin", "system_admin"].includes(role);
+        if (!canManage) return null;
+        const pctT = (x) => Math.round((x || 0) * 100) + "%";
+        return (
+          <div data-testid="links-panel" className="bg-[#222222] border border-[#2D2D2D] rounded-xl p-5 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div><h3 className="text-sm font-bold text-white">🔗 Tables that belong together</h3><p className="text-[11px] text-[#A0A0A0]">SAMM suggests links between this client's tables, checks them against the real values, and only links you approve are used for drill-down.</p></div>
+              <button data-testid="links-open" onClick={() => { setOpen(!open); if (!open && !data) load(); }} className="border border-[#3D3D3D] hover:border-amber-500 text-white text-xs px-3 py-1.5 rounded-lg">{open ? "Hide" : "Find links"}</button>
+            </div>
+            <ErrBox err={err} />
+            {open && busy === "load" && <div className="text-xs text-[#A0A0A0]">Looking at the columns...</div>}
+            {open && data && (
+              <div className="space-y-3">
+                {data.candidates.length === 0 && <div data-testid="links-none" className="text-xs text-[#A0A0A0]">No likely links found. Link finding needs at least two tables with key-like columns such as a code or id.</div>}
+                {data.candidates.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-3 text-xs">
+                    <button data-testid="links-check-all" onClick={checkAll} disabled={!!prog || data.candidates.every((c) => c.stats)} className="border border-[#3D3D3D] hover:border-amber-500 text-white px-3 py-1 rounded-md disabled:opacity-50">Check all</button>
+                    {prog && <span data-testid="links-progress" className="text-amber-300">{prog}</span>}
+                  </div>
+                )}
+                {data.candidates.map((c) => {
+                  const link = (data.links || []).find((l) => l.id === c.id) || c;
+                  return (
+                    <div key={c.id} data-testid="link-row" className="border border-[#2D2D2D] rounded-lg p-3 bg-[#1B1B1B]">
+                      <div className="flex flex-wrap items-center gap-2 text-xs">
+                        <span className="text-white font-semibold">{c.a_label}<span className="text-amber-300 font-mono"> · {c.a.column}</span></span>
+                        <span className="text-[#78869b]">↔</span>
+                        <span className="text-white font-semibold">{c.b_label}<span className="text-amber-300 font-mono"> · {c.b.column}</span></span>
+                        <span data-testid="link-status" className={"ml-auto px-2 py-0.5 rounded-full border text-[10px] " + (c.status === "approved" ? "border-green-700 text-green-300" : c.status === "rejected" ? "border-red-800 text-red-300" : "border-[#3D3D3D] text-[#A0A0A0]")}>{c.status === "new" ? "not checked" : c.status}</span>
+                      </div>
+                      <LinkStats link={{ ...link, stats: c.stats || link.stats }} />
+                      <div className="flex gap-2 mt-2 text-xs">
+                        <button data-testid="link-check" disabled={busy === c.id} onClick={() => check(c)} className="border border-[#3D3D3D] hover:border-amber-500 text-white px-2 py-1 rounded disabled:opacity-50">{c.stats ? "Check again" : "Check"}</button>
+                        {c.stats && c.status !== "approved" && <button data-testid="link-approve" disabled={busy === c.id} onClick={() => decide(c, "approve")} className="border border-green-700 text-green-300 hover:bg-green-900/30 px-2 py-1 rounded disabled:opacity-50">Approve</button>}
+                        {c.stats && c.status !== "rejected" && <button data-testid="link-reject" disabled={busy === c.id} onClick={() => decide(c, "reject")} className="border border-red-800 text-red-300 hover:bg-red-900/30 px-2 py-1 rounded disabled:opacity-50">Reject</button>}
+                      </div>
+                    </div>
+                  );
+                })}
+                <div className="border-t border-[#2D2D2D] pt-3 space-y-2" data-testid="drill-setup">
+                  <div className="text-xs font-bold text-white">Drill-down levels</div>
+                  {(data.hierarchies || []).map((h) => (
+                    <div key={h.name} data-testid="drill-saved" className="flex flex-wrap items-center gap-3 text-xs">
+                      <span className="text-white font-semibold">{h.name}</span><span className="text-[#A0A0A0]">{(h.labels || h.levels).join(" › ")}</span>
+                      <button data-testid="drill-open" onClick={() => setDrill(h.name)} className="underline text-amber-400">Open</button>
+                      <button onClick={() => del(h.name)} className="underline text-[#A0A0A0]">Delete</button>
+                    </div>
+                  ))}
+                  <button data-testid="drill-suggest" onClick={suggest} disabled={busy === "chain"} className="border border-[#3D3D3D] hover:border-amber-500 text-white text-xs px-3 py-1 rounded-md disabled:opacity-50">Suggest levels from approved links</button>
+                  {chain && chain.levels.length === 0 && <div data-testid="drill-none" className="text-xs text-amber-200">No chain yet. Approve at least one link where one table is the parent of another (for example Property and Site).</div>}
+                  {chain && chain.levels.length > 0 && (
+                    <div className="border border-[#2D2D2D] rounded-lg p-3 bg-[#1B1B1B] space-y-2 text-xs">
+                      {chain.levels.map((d, i) => (
+                        <div key={d} data-testid="drill-level" className="flex items-center gap-2">
+                          <span className="text-[#78869b] w-12">Level {i + 1}</span><span className="text-white font-semibold">{chain.labels[i]}</span>
+                          <button aria-label="Move up" data-testid="level-up" onClick={() => move(i, -1)} disabled={i === 0} className="border border-[#3D3D3D] px-1.5 rounded disabled:opacity-30">↑</button>
+                          <button aria-label="Move down" data-testid="level-down" onClick={() => move(i, 1)} disabled={i === chain.levels.length - 1} className="border border-[#3D3D3D] px-1.5 rounded disabled:opacity-30">↓</button>
+                        </div>
+                      ))}
+                      <div className="flex gap-2"><input aria-label="Drill-down name" value={hname} onChange={(e) => setHname(e.target.value)} maxLength={60} className="bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-white w-64" /><button data-testid="drill-save" onClick={save} disabled={busy === "save" || !hname.trim()} className="bg-amber-600 hover:bg-amber-500 text-white font-bold px-3 py-1 rounded-md disabled:opacity-50">Save drill-down</button></div>
+                    </div>
+                  )}
+                </div>
+                {role === "system_admin" && (
+                  <div className="border-t border-[#2D2D2D] pt-3 space-y-2" data-testid="misfile-box">
+                    <div className="text-xs font-bold text-white">Is a table filed under the wrong client? <span className="text-[#78869b] font-normal">(system administrators only)</span></div>
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <select aria-label="Table to check" data-testid="misfile-select" value={mis.ds} onChange={(e) => setMis({ ds: e.target.value, busy: false, msg: "", verdict: undefined, detail: null, flagged: false })} className="bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-white">
+                        <option value="">Choose a table</option>{(data.tables || []).map((d) => <option key={d} value={d}>{label(d)}</option>)}
+                      </select>
+                      <button data-testid="misfile-run" disabled={!mis.ds || mis.busy} onClick={checkClient} className="border border-[#3D3D3D] hover:border-amber-500 text-white px-3 py-1 rounded-md disabled:opacity-50">Check which client it belongs to</button>
+                      {mis.msg && <span className="text-amber-300">{mis.msg}</span>}
+                    </div>
+                    {mis.verdict === null && mis.detail && <div data-testid="misfile-ok" className="text-xs text-green-300">No sign of a mix-up. It matches this client {mis.detail.own == null ? "(nothing to compare with yet)" : "at " + pctT(mis.detail.own)}{Object.keys(mis.detail.others).length ? "; the best match elsewhere is " + pctT(Math.max.apply(null, Object.values(mis.detail.others))) : ""}.</div>}
+                    {mis.verdict && (
+                      <div data-testid="misfile-warn" className="border border-amber-700 bg-[#2A2410] rounded-lg p-3 text-xs text-amber-100 space-y-2">
+                        <div>⚠ This table may belong to <b>{mis.verdict.client}</b>. Its values match {mis.verdict.client} at {pctT(mis.verdict.match_other)} but this client at only {pctT(mis.verdict.match_own)}.</div>
+                        {!mis.flagged ? <button data-testid="misfile-flag" onClick={flag} className="border border-amber-500 text-amber-200 hover:bg-amber-900/30 px-3 py-1 rounded">Record a move request to {mis.verdict.client}</button>
+                          : <div data-testid="misfile-flagged" className="text-green-300">Recorded and logged. To finish the move: upload the original file under {mis.verdict.client} (Add data), then remove this copy.</div>}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+            {drill && <DrillView api={api} name={drill} onClose={() => setDrill("")} />}
+          </div>
+        );
+      }
+
       function OnboardingHub({ session, onAsk, onViewsChanged, clients, clientNames, acting }) {
         const [items, setItems] = useState([]);
         const [over, setOver] = useState(false);
         const [pipe, setPipe] = useState({ busy: false, msg: "", err: null });
         const [history, setHistory] = useState({ open: false, loading: false, list: [], limit: 10, client: null, err: null });
+        const [order, setOrderState] = useState(() => { try { return localStorage.getItem("samm_hist_order") === "oldest" ? "oldest" : "newest"; } catch (_) { return "newest"; } });
+        const setOrder = (o) => { setOrderState(o); try { localStorage.setItem("samm_hist_order", o); } catch (_) { /* optional */ } };
+        const sortedHistory = history.list.slice().sort((a, b) => (String(a.created || "") < String(b.created || "") ? -1 : 1) * (order === "oldest" ? 1 : -1));
         const [viewsTick, setViewsTick] = useState(0);
         const seq = useRef(0);
         const itemsRef = useRef([]);
@@ -1623,7 +2013,7 @@
             upd(id, { stage: "upload", msg: "Requesting a secure upload link..." });
             const init = await api({ action: "upload_init", filename: file.name, size: file.size });
             upd(id, { msg: "Uploading to Bronze..." });
-            await putFile(init.upload_url, file);
+            await putFile(init.upload_url, file, (pct) => upd(id, { uploadPct: pct, msg: "Uploading to Bronze... " + pct + "%" }));
             upd(id, { stage: "bronze", msg: "Stored in Bronze. SAMM takes it from here..." });
             let started = null;
             try { started = await api({ action: "job_start", key: init.key }); } catch (e) {
@@ -1738,7 +2128,7 @@
             </div>
 
             <div data-testid="onb-toolbar" className="flex flex-wrap items-center gap-3">
-              <button onClick={() => setItems([])} disabled={items.length === 0 || anyLive} data-testid="clear-list" title={anyLive ? "Wait for running uploads to finish" : "Empty this list (nothing is deleted)"} className="border border-[#3D3D3D] hover:border-amber-500 text-xs text-white px-3 py-2 rounded-lg disabled:opacity-40">🧹 Clear list</button>
+              <button onClick={() => setItems([])} disabled={items.length === 0} data-testid="clear-list" title="Empty this list (nothing is deleted; running jobs carry on and stay in History)" className="border border-[#3D3D3D] hover:border-amber-500 text-xs text-white px-3 py-2 rounded-lg disabled:opacity-40">🧹 Clear list</button>
               <button onClick={() => (history.open ? setHistory((h) => ({ ...h, open: false })) : loadHistory(history.limit))} data-testid="history-toggle" className="border border-[#3D3D3D] hover:border-amber-500 text-xs text-white px-3 py-2 rounded-lg">{history.open ? "Hide history" : "📜 History"}</button>
               <span className="text-[11px] text-[#808080]">{items.length === 0 ? "Your list is empty. Drop a file above to start." : items.length + " on this screen. Clearing only tidies the screen."}</span>
             </div>
@@ -1752,9 +2142,17 @@
                 {history.loading && <div className="text-xs text-[#A0A0A0]">Loading...</div>}
                 <ErrBox err={history.err} />
                 {!history.loading && !history.err && history.list.length === 0 && <div className="text-xs text-[#808080]">No jobs yet for this client.</div>}
-                {history.list.map((j) => (
+                <div className="flex items-center gap-2 text-[11px] font-mono text-[#A0A0A0]">
+                  <span>Order:</span>
+                  <button data-testid="order-newest" onClick={() => setOrder("newest")} className={"px-2 py-1 rounded border " + (order === "newest" ? "border-amber-500 text-amber-300" : "border-[#3D3D3D]")}>Newest first ↓</button>
+                  <button data-testid="order-oldest" onClick={() => setOrder("oldest")} className={"px-2 py-1 rounded border " + (order === "oldest" ? "border-amber-500 text-amber-300" : "border-[#3D3D3D]")}>Oldest first ↑</button>
+                </div>
+                {sortedHistory.map((j) => (
                   <div key={j.id} className="border border-[#2D2D2D] rounded-lg p-4 bg-[#1D1D1D] space-y-2" data-testid="job-row">
-                    <div className="text-sm text-white font-mono truncate">{j.file}</div>
+                    <div className="flex flex-wrap items-baseline justify-between gap-2">
+                      <div className="text-sm text-white font-mono truncate">{j.file}</div>
+                      <div data-testid="job-time" className="text-[11px] text-[#A0A0A0] font-mono">{fmtWhen(j.created)}{j.updated && j.updated !== j.created ? " · last update " + fmtWhen(j.updated) : ""}</div>
+                    </div>
                     <JobCard job={j} api={apiFor(history.client)} onUpdate={mergeJob} onAsk={onAsk} onViewsChanged={onViewsChanged} onDismiss={() => setHistory((h) => ({ ...h, list: h.list.filter((x) => x.id !== j.id) }))} />
                   </div>
                 ))}
@@ -1765,6 +2163,7 @@
             )}
 
             <GoldViews api={api} onAsk={onAsk} tick={viewsTick} />
+            <LinksPanel key={acting} api={api} role={session.identity ? session.identity.role : ""} />
             <TeachPanel api={api} />
             <SelfTestPanel api={api} />
 
@@ -1778,10 +2177,16 @@
                     <div className="flex items-center gap-3 shrink-0">
                       {it.client && <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-[#333] text-[#BBB]" data-testid="item-client">client: {it.client}</span>}
                       {it.size > 0 && <div className="text-[11px] text-[#808080]">{(it.size / 1024).toFixed(0)} KB</div>}
-                      <button onClick={() => dismiss(it.id)} disabled={liveItem(it)} data-testid="item-dismiss" aria-label={"Dismiss " + it.name} title={liveItem(it) ? "Still running" : "Remove from this list"} className="text-[11px] text-[#A0A0A0] hover:text-white disabled:opacity-40 underline">Dismiss</button>
+                      <button onClick={() => dismiss(it.id)} data-testid="item-dismiss" aria-label={"Dismiss " + it.name} title="Remove from this list (a running job carries on and stays in History)" className="text-[11px] text-[#A0A0A0] hover:text-white underline">Dismiss</button>
                     </div>
                   </div>
                   {it.job && <JobCard job={it.job} api={iapi} onUpdate={(j) => upd(it.id, { job: j })} onAsk={onAsk} onViewsChanged={onViewsChanged} onDismiss={() => dismiss(it.id)} />}
+                  {!it.job && !it.error && !it.done && (
+                    <div data-testid="upload-progress" className="space-y-1">
+                      <div className="flex justify-between text-[11px] font-mono text-[#C0C0C0]"><span>{it.stage === "upload" ? "Uploading" : it.stage === "bronze" ? "Stored in Bronze" : "Working"}</span><span>{(it.stage === "upload" ? Math.round((it.uploadPct || 0) * 0.2) : 25)}%</span></div>
+                      <div className="h-2 bg-[#2D2D2D] rounded"><div className="h-2 rounded bg-amber-500 transition-all duration-300" style={{ width: (it.stage === "upload" ? Math.round((it.uploadPct || 0) * 0.2) : 25) + "%" }} /></div>
+                    </div>
+                  )}
                   {!it.job && <div className="flex flex-wrap gap-2 text-[11px] font-mono">
                     {STAGES.map((s, n) => (
                       <span key={s[0]} className={"px-2 py-1 rounded border " + (it.done || n < idx ? "border-green-700 text-green-300" : n === idx && !it.error ? "border-amber-500 text-amber-300" : "border-[#333] text-[#707070]")}>
@@ -2116,8 +2521,10 @@
             take(m[1]);
           }
           const on = (e) => e.detail && e.detail.id && take(e.detail.id);
+          const again = () => loadViews();
           window.addEventListener("samm-open-report", on);
-          return () => window.removeEventListener("samm-open-report", on);
+          window.addEventListener("samm-titles-changed", again);
+          return () => { window.removeEventListener("samm-open-report", on); window.removeEventListener("samm-titles-changed", again); };
         }, []);
         useEffect(() => {
           if (demo) return;
@@ -2132,6 +2539,8 @@
           if (demo) return;
           try {
             const r = await callBackend(session.url, session.token, { action: "views" });
+            const tmap = {}; (r.views || []).forEach((v) => { if (v.title) tmap[v.name] = { title: v.title, subject: v.subject || "" }; });
+            window.__sammTitles = tmap;
             setViews(r.views || []);
             setDefaultView(r.default || "");
           } catch (_) {
@@ -2181,8 +2590,60 @@
           return sendText(input.trim());
         };
 
+        // v24: split view (chat docked beside a report or the data viewer) and report commands typed in the chat
+        const [split, setSplit] = useState(null);       // { dataset, view, reportId, since }
+        const [openReport, setOpenReport] = useState(null);   // the report last opened: { id, title, accent }
+        const messagesRef = useRef(messages);
+        messagesRef.current = messages;
+        useEffect(() => {
+          const ask = (e) => {
+            const d = e.detail || {};
+            const base = (x) => String(x || "").replace(/^silver_/, "");
+            const v = (views || []).find((x) => x.name === d.view || (d.dataset && (x.dataset === d.dataset || base(x.dataset) === base(d.dataset))));
+            if (v) setActiveView(v.name);
+            setTalk(null);
+            setSplit({ dataset: d.dataset || (v && v.dataset) || "", view: v ? v.name : (d.view || ""), reportId: d.reportId || "", since: messagesRef.current.length });
+          };
+          const opened = (e) => { if (e.detail && e.detail.id) setOpenReport(e.detail); };
+          window.addEventListener("samm-split-ask", ask);
+          window.addEventListener("samm-report-opened", opened);
+          return () => { window.removeEventListener("samm-split-ask", ask); window.removeEventListener("samm-report-opened", opened); };
+        }, [views]);
+        useEffect(() => { if (activeTab === "chat" && split) setSplit(null); }, [activeTab]);
+        const live = (() => {
+          if (!split) return null;
+          for (let i = messages.length - 1; i >= split.since; i--) {
+            const m = messages[i];
+            if (m.role === "assistant" && !m.error && Array.isArray(m.rows) && m.rows.length) return { id: m.id, question: m.question || "", rows: m.rows };
+          }
+          return null;
+        })();
+        const reportApi = (p) => callBackend(session.url, session.token, p);
+        const addToReport = async (m) => {
+          if (!split || !split.reportId) return;
+          const r = await reportApi({ action: "report_update", id: split.reportId, add_tile: { title: String(m.question || "Answer").slice(0, 120), rows: m.rows.slice(0, 60), at: stamp() } });
+          window.dispatchEvent(new CustomEvent("samm-report-updated", { detail: { report: r.report } }));
+        };
+        const runReportCommand = async (userText, cmd) => {
+          addMessage({ role: "user", text: userText });
+          setInput("");
+          if (!openReport) { addMessage({ role: "assistant", text: "Open a report first (Reports in the menu), then ask me again and I will change it." }); return; }
+          setIsLoading(true);
+          try {
+            const r = await reportApi({ action: "report_update", id: openReport.id, ...cmd });
+            setOpenReport({ id: r.report.id, title: r.report.title, accent: r.report.accent || "" });
+            window.dispatchEvent(new CustomEvent("samm-report-updated", { detail: { report: r.report } }));
+            addMessage({ role: "assistant", text: cmd.title ? "Done. The report is now called **" + r.report.title + "**." : "Done. The report colour is now " + (cmd.accent.startsWith("#") ? cmd.accent : cmd.accent) + "." });
+          } catch (e) {
+            addMessage({ role: "assistant", error: { message: (e && e.message) || "Could not change the report.", details: [], status: (e && e.status) || 0 } });
+          } finally { setIsLoading(false); }
+        };
         const sendText = async (userText) => {
           if (!userText || isLoading) return;
+          if (!demo) {
+            const cmd = parseReportCommand(userText);
+            if (cmd && (openReport || cmd.title)) return runReportCommand(userText, cmd);
+          }
           addMessage({ role: "user", text: userText });
           setInput("");
           setIsLoading(true);
@@ -2263,7 +2724,9 @@
             ? "text-[#555555] cursor-not-allowed"
             : "text-[#A0A0A0] hover:bg-[#252525] hover:text-white");
 
+        const splitLabel = split ? (split.reportId && openReport ? openReport.title : friendlyView(split.view || split.dataset, acting || identity.tenant_id)) : "";
         return (
+          <SplitCtx.Provider value={{ open: !!split && activeTab !== "chat", dataset: split ? split.dataset : "", view: split ? split.view : "", reportId: split ? split.reportId : "", live }}>
           <div className="flex h-screen bg-[#191919] text-[#E3E3E3] font-sans overflow-hidden w-full">
             {/* LEFT SIDEBAR PANEL */}
             <div className="w-64 bg-[#202020] border-r border-[#2D2D2D] flex flex-col justify-between flex-shrink-0">
@@ -2330,7 +2793,7 @@
                   <div className="text-xs font-mono space-y-1">
                     <div data-testid="who-role" className="text-white">{ROLE_LABELS[identity.role] || identity.role}</div>
                     <div className="text-[#A0A0A0] truncate" title={identity.email}>{identity.email}</div>
-                    <div data-testid="who-version" className="text-[#707070]">Server {identity.version || "older than v22 - redeploy the backend"} · Screen v22</div>
+                    <div data-testid="who-version" className="text-[#707070]">Server {identity.version || "older than v24 - redeploy the backend"} · Screen v24</div>
                     <button onClick={onSignOut} className="mt-2 text-[#A0A0A0] hover:text-white underline">Sign out</button>
                   </div>
                 )}
@@ -2535,6 +2998,10 @@
               )}
             </div>
 
+            {split && activeTab !== "chat" && (
+              <SplitChat messages={messages} since={split.since + 1} isLoading={isLoading} input={input} setInput={setInput} onSend={sendText}
+                onClose={() => setSplit(null)} label={splitLabel} reportId={split.reportId} onAdd={addToReport} onOpenArtifact={openArtifact} />
+            )}
             {/* RIGHT-HAND ARTIFACT PANEL */}
             <ArtifactPanel
               open={panelOpen}
@@ -2544,6 +3011,7 @@
               onClose={() => setPanelOpen(false)}
             />
           </div>
+          </SplitCtx.Provider>
         );
       }
 
