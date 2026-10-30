@@ -1387,13 +1387,13 @@
           </div>
         );
       }
-      function DataViewer({ api, dataset, view }) {
+      function DataViewer({ api, dataset, view, initial }) {
         const ctx = React.useContext(SplitCtx);
         const [showAll, setShowAll] = useState(false);
         const sameSet = (a, b) => String(a || "").replace(/^silver_/, "") === String(b || "").replace(/^silver_/, "");
         const liveOn = ctx.open && !ctx.reportId && sameSet(ctx.dataset, dataset) && ctx.live;
         useEffect(() => { setShowAll(false); }, [ctx.live && ctx.live.id]);
-        const [layer, setLayer] = useState("gold");
+        const [layer, setLayer] = useState(initial || "gold");
         const [res, setRes] = useState({});
         const [busy, setBusy] = useState(false);
         const load = async (l) => {
@@ -1403,7 +1403,7 @@
           try { const r = await api({ action: "data_peek", dataset, layer: l }); setRes((p) => ({ ...p, [l]: r })); }
           catch (e) { setRes((p) => ({ ...p, [l]: { error: e.message || "Could not load." } })); } finally { setBusy(false); }
         };
-        useEffect(() => { load("gold"); }, []);
+        useEffect(() => { load(initial || "gold"); }, []);
         const cur = res[layer];
         return (
           <div data-testid="data-viewer" className="border border-[#2D2D2D] rounded-lg p-3 bg-[#1B1B1B] space-y-2">
@@ -1703,6 +1703,37 @@
         );
       }
 
+
+      // v24: the Silver tab lists the converted tables; each can be opened as data or have its column matching checked.
+      function SilverTab({ api, onAsk, tick }) {
+        const [rows, setRows] = useState(null);
+        const [err, setErr] = useState(null);
+        const [openData, setOpenData] = useState(null);
+        const [openMap, setOpenMap] = useState(null);
+        const load = async () => { try { const r = await api({ action: "datasets" }); setRows(r.datasets || []); setErr(null); } catch (e) { setErr(e); } };
+        useEffect(() => { load(); }, [tick]);
+        return (
+          <div data-testid="silver-tab" className="bg-[#222222] border border-[#2D2D2D] rounded-xl p-5 shadow space-y-3">
+            <div><h3 className="text-sm font-bold text-white">Silver · converted tables</h3><p className="text-[11px] text-[#808080] mt-1">Your files turned into rows and columns. Open one to see the data, or check how its columns are matched to your standard names.</p></div>
+            <ErrBox err={err} />
+            {!rows && !err && <div className="text-xs text-[#A0A0A0]">Loading...</div>}
+            {rows && rows.length === 0 && <div data-testid="silver-empty" className="text-xs text-[#808080]">Nothing converted yet. Drop a file on the Upload tab.</div>}
+            {(rows || []).map((d) => (
+              <div key={d.dataset} data-testid="silver-row" className="border border-[#2D2D2D] rounded-lg p-3 bg-[#1D1D1D] space-y-2">
+                <div className="flex flex-wrap items-center gap-3 text-xs">
+                  <span className="font-mono text-amber-400">{d.title || String(d.dataset).replace(/^silver_/, "")}</span>
+                  <span className="text-[#808080]">{d.view ? "Gold view ready" : "No Gold view yet"}{d.owner ? " · owner " + d.owner : ""}</span>
+                  <button data-testid="silver-view" onClick={() => setOpenData(openData === d.dataset ? null : d.dataset)} className="underline text-amber-400 hover:text-amber-300">{openData === d.dataset ? "Hide data" : "View data"}</button>
+                  <button data-testid="silver-map" onClick={() => setOpenMap(openMap === d.dataset ? null : d.dataset)} className="underline text-amber-400 hover:text-amber-300">{openMap === d.dataset ? "Close" : "Check how columns are matched"}</button>
+                </div>
+                {openData === d.dataset && <DataViewer api={api} dataset={d.dataset} view={d.view} initial="silver" />}
+                {openMap === d.dataset && <MappingEditor key={d.dataset} dataset={d.dataset} api={api} onAsk={onAsk} onClose={() => setOpenMap(null)} onBuilt={() => load()} />}
+              </div>
+            ))}
+          </div>
+        );
+      }
+
       function GoldViews({ api, onAsk, tick }) {
         const [rows, setRows] = useState(null);
         const [open, setOpen] = useState(null);
@@ -1979,6 +2010,7 @@
         const setOrder = (o) => { setOrderState(o); try { localStorage.setItem("samm_hist_order", o); } catch (_) { /* optional */ } };
         const sortedHistory = history.list.slice().sort((a, b) => (String(a.created || "") < String(b.created || "") ? -1 : 1) * (order === "oldest" ? 1 : -1));
         const [viewsTick, setViewsTick] = useState(0);
+        const [tab, setTab] = useState("upload");
         const seq = useRef(0);
         const itemsRef = useRef([]);
         itemsRef.current = items;
@@ -2102,8 +2134,15 @@
             <div className="bg-[#222222] border border-[#2D2D2D] rounded-xl p-6 shadow-xl space-y-4">
               <div>
                 <h2 className="text-lg font-bold text-white">📦 Add data</h2>
-                <p className="text-xs text-[#A0A0A0] mt-1">Upload raw files. SAMM lands them in Bronze, structures them in Silver, suggests how their fields map to your standard names, and builds a Gold view the chat can query. csv, tsv, json, jsonl, txt and Excel are structured; other formats are archived untouched.</p>
+                <p className="text-xs text-[#A0A0A0] mt-1">Drop a file and SAMM keeps the original (Bronze), turns it into rows and columns (Silver), suggests how its columns match your standard names, and builds a view you can ask questions about (Gold). csv, tsv, json, jsonl, txt and Excel are structured; other formats are archived untouched.</p>
               </div>
+              <div data-testid="onb-tabs" role="tablist" className="flex flex-wrap gap-2 border-b border-[#2D2D2D] pb-3">
+                {[["upload", "⬆ Upload", "Drop a file and watch it move through"], ["bronze", "Bronze", "The original files, exactly as uploaded"], ["silver", "Silver", "Converted tables"], ["gold", "Gold views", "Ready to use: ask questions, publish reports"], ["links", "Links & drill-down", "Tables that belong together"], ["tools", "Tools", "Teach SAMM and self-test"]].map(([id, label, tip]) => (
+                  <button key={id} role="tab" aria-selected={tab === id} title={tip} data-testid={"onb-tab-" + id} onClick={() => { setTab(id); if (id === "bronze" && !history.open) loadHistory(history.limit); }}
+                    className={"px-3 py-1.5 rounded-lg text-xs font-semibold border transition " + (tab === id ? "border-amber-500 bg-amber-500/10 text-amber-300" : "border-[#3D3D3D] text-[#C0C0C0] hover:border-amber-600 hover:text-white")}>{label}</button>
+                ))}
+              </div>
+              {tab === "upload" && (<>
               {(clients || []).length > 1 && (
                 <label className="flex flex-wrap items-center gap-2 text-xs text-[#C0C0C0]">Which client is this data for?
                   <select data-testid="onb-client" aria-label="Client for this data" value={target || acting} onChange={(e) => setTarget(e.target.value)} className="bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-white">
@@ -2122,22 +2161,29 @@
                 <div className="text-[11px] text-[#808080] mt-1">Up to 25 MB for csv/json/txt, 50 MB for Excel, 100 MB for archives</div>
                 <input id="onb-file" data-testid="onb-file" type="file" multiple accept={ACCEPT} className="hidden" onChange={(e) => { addFiles(e.target.files); e.target.value = ""; }} />
               </label>
-              <div className="flex flex-wrap items-center gap-3">
-                <button onClick={runPipeline} disabled={pipe.busy} className="border border-[#3D3D3D] hover:border-amber-500 text-xs text-white px-3 py-2 rounded-lg disabled:opacity-50">▶ Run pipeline now</button>
+              <details className="text-xs"><summary data-testid="more-options" className="cursor-pointer text-[#A0A0A0] hover:text-white">More options</summary><div className="flex flex-wrap items-center gap-3 mt-2">
+                <button onClick={runPipeline} disabled={pipe.busy} className="border border-[#3D3D3D] hover:border-amber-500 text-xs text-white px-3 py-2 rounded-lg disabled:opacity-50">▶ Process files already uploaded</button>
                 <button onClick={() => checkNew(false)} disabled={pipe.busy} className="border border-[#3D3D3D] hover:border-amber-500 text-xs text-white px-3 py-2 rounded-lg disabled:opacity-50">🔎 Check for new datasets</button>
-                <button onClick={() => checkNew(true)} disabled={pipe.busy} data-testid="review-all" className="border border-[#3D3D3D] hover:border-amber-500 text-xs text-white px-3 py-2 rounded-lg disabled:opacity-50">✏️ Review existing mappings</button>
-                <span className="text-[11px] text-[#808080]">Run pipeline = convert files already in Bronze with your orchestrator.</span>
-              </div>
+                <button onClick={() => checkNew(true)} disabled={pipe.busy} data-testid="review-all" className="border border-[#3D3D3D] hover:border-amber-500 text-xs text-white px-3 py-2 rounded-lg disabled:opacity-50">✏️ Check how columns are matched</button>
+                <span className="text-[11px] text-[#808080]">Processes files that are already in Bronze with your orchestrator.</span></div></details>
               {pipe.msg && <div className="text-xs text-green-300">{pipe.msg}</div>}
               <ErrBox err={pipe.err} />
+              </>)}
             </div>
 
+            {tab === "upload" && (<>
             <div data-testid="onb-toolbar" className="flex flex-wrap items-center gap-3">
               <button onClick={() => setItems([])} disabled={items.length === 0} data-testid="clear-list" title="Empty this list (nothing is deleted; running jobs carry on and stay in History)" className="border border-[#3D3D3D] hover:border-amber-500 text-xs text-white px-3 py-2 rounded-lg disabled:opacity-40">🧹 Clear list</button>
-              <button onClick={() => (history.open ? setHistory((h) => ({ ...h, open: false })) : loadHistory(history.limit))} data-testid="history-toggle" className="border border-[#3D3D3D] hover:border-amber-500 text-xs text-white px-3 py-2 rounded-lg">{history.open ? "Hide history" : "📜 History"}</button>
+              <button onClick={() => { setTab("bronze"); loadHistory(history.limit); }} data-testid="history-toggle" className="border border-[#3D3D3D] hover:border-amber-500 text-xs text-white px-3 py-2 rounded-lg">{history.open ? "Hide history" : "📜 History"}</button>
               <span className="text-[11px] text-[#808080]">{items.length === 0 ? "Your list is empty. Drop a file above to start." : items.length + " on this screen. Clearing only tidies the screen."}</span>
             </div>
 
+            {items.some((i) => i.done) && (
+              <div data-testid="done-banner" className="flex flex-wrap items-center gap-3 text-xs bg-[#10241A] border border-green-800 rounded-lg px-4 py-2 text-green-300">
+                ✓ A data set is ready.
+                <button data-testid="go-gold" onClick={() => setTab("gold")} className="underline text-green-200 hover:text-white">View it in Gold views</button>
+              </div>
+            )}
             {items.map((it) => {
               const idx = STAGES.findIndex((s) => s[0] === it.stage);
               const iapi = apiFor(it.client);
@@ -2175,8 +2221,9 @@
                 </div>
               );
             })}
+            </>)}
 
-            {history.open && (
+            {tab === "bronze" && history.open && (
               <div data-testid="job-list" className="bg-[#222222] border border-[#2D2D2D] rounded-xl p-5 shadow space-y-4">
                 <div>
                   <h3 className="text-sm font-bold text-white">Onboarding history{history.client ? " · " + history.client : ""}</h3>
@@ -2205,10 +2252,10 @@
               </div>
             )}
 
-            <GoldViews api={api} onAsk={onAsk} tick={viewsTick} />
-            <LinksPanel key={acting} api={api} role={session.identity ? session.identity.role : ""} />
-            <TeachPanel api={api} />
-            <SelfTestPanel api={api} />
+            {tab === "silver" && <SilverTab api={api} onAsk={onAsk} tick={viewsTick} />}
+            {tab === "gold" && <GoldViews api={api} onAsk={onAsk} tick={viewsTick} />}
+            {tab === "links" && <LinksPanel key={acting} api={api} role={session.identity ? session.identity.role : ""} />}
+            {tab === "tools" && (<><TeachPanel api={api} /><SelfTestPanel api={api} /></>)}
 
           </div>
         );
