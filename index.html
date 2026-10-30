@@ -871,6 +871,12 @@
       // ------------------------------------------------------------------
       // Data Onboarding hub (live): upload -> Bronze -> Silver -> field mapping -> Gold view
       // ------------------------------------------------------------------
+      function friendlyView(v, tenant) {
+        let n = String(v || "").replace(/^gold_ai_/, "");
+        if (tenant && n.toLowerCase().startsWith(String(tenant).toLowerCase() + "__")) n = n.slice(String(tenant).length + 2);
+        n = n.replace(/^[A-Za-z0-9\-]+__/, "").replace(/_+/g, " ").trim();
+        return n ? n.charAt(0).toUpperCase() + n.slice(1) : String(v || "");
+      }
       const STAGES = [["upload", "Upload"], ["bronze", "Bronze"], ["silver", "Silver"], ["map", "Map fields"], ["gold", "Gold view"]];
       const ACCEPT = ".xlsx,.xlsm,.csv,.tsv,.json,.jsonl,.txt,.pdf,.docx,.pptx,.png,.jpg,.jpeg,.xml,.parquet,.zip,.md,.log";
 
@@ -1133,6 +1139,48 @@
       // ------------------------------------------------------------------
       // One onboarding job: the back end does the work, this card only shows progress and asks for approvals
       // ------------------------------------------------------------------
+
+      // v21: the staged view - Upload > Bronze > Silver > Map fields > Gold, with how much of the data is mapped so far.
+      function jobStages(job) {
+        const ds = Object.values(job.datasets || {});
+        const auto = ds.reduce((a, d) => a + (d.auto_mapped || 0), 0);
+        const open = ds.reduce((a, d) => a + ((d.queue || []).length), 0);
+        const failed = job.status === "failed";
+        const hasDs = ds.length > 0;
+        const allDone = hasDs && ds.every((d) => d.state === "done");
+        const mapPct = job.status === "done" || allDone ? 100 : (auto + open) > 0 ? Math.round((auto / (auto + open)) * 100) : (hasDs ? 0 : null);
+        const waiting = ds.some((d) => d.state === "approval" || d.state === "review");
+        const st = (n) => n;
+        const silverDone = hasDs;
+        const mapDone = allDone || job.status === "done";
+        const goldDone = job.status === "done" || allDone;
+        const cur = failed ? -1 : goldDone ? 5 : mapDone ? 4 : silverDone ? 3 : 2;   // index of the stage in progress
+        return { pct: mapPct, auto, open, waiting, failed, cur,
+          stages: [["Upload", true], ["Bronze", true], ["Silver", silverDone], ["Map fields", mapDone], ["Gold view", goldDone]] };
+      }
+      function StageTracker({ job }) {
+        const j = jobStages(job);
+        return (
+          <div data-testid="stage-tracker" className="space-y-2">
+            <div className="flex flex-wrap gap-2 text-[11px] font-mono">
+              {j.stages.map(([label, done], n) => (
+                <span key={label} data-testid={"stage-" + label.split(" ")[0].toLowerCase()} className={"px-2 py-1 rounded border " + (done ? "border-green-700 text-green-300" : n === j.cur && !j.failed ? "border-amber-500 text-amber-300" : j.failed && n === j.cur ? "border-red-700 text-red-300" : "border-[#333] text-[#707070]")}>
+                  {(done ? "✓ " : "") + label}
+                </span>
+              ))}
+            </div>
+            {j.pct !== null && (
+              <div data-testid="mapped-pct" className="space-y-1">
+                <div className="flex justify-between text-[11px] font-mono text-[#C0C0C0]">
+                  <span>Fields mapped</span>
+                  <span>{j.pct}%{j.open > 0 ? " · " + j.open + " need" + (j.open === 1 ? "s" : "") + " your confirmation" : ""}</span>
+                </div>
+                <div className="h-1.5 bg-[#2D2D2D] rounded"><div className="h-1.5 rounded bg-emerald-500" style={{ width: j.pct + "%" }} /></div>
+              </div>
+            )}
+          </div>
+        );
+      }
       const JOB_STATUS = {
         queued: "Starting...", running: "SAMM is working on it...", waiting: "Waiting for the Excel conversion to finish...",
         needs_approval: "Needs your confirmation", done: "Done", failed: "Stopped with an error",
@@ -1178,6 +1226,7 @@
         const bar = job.status === "failed" ? "bg-red-600" : job.status === "needs_approval" ? "bg-amber-500" : "bg-green-600";
         return (
           <div data-testid="job-card" className="space-y-3">
+            <StageTracker job={job} />
             <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono">
               <span className="px-2 py-0.5 rounded bg-[#333] text-[#BBB]">{job.source === "screen" ? "from this screen" : "back-end drop"}</span>
               <span data-testid="job-status" className={job.status === "failed" ? "text-red-300" : job.status === "done" ? "text-green-300" : "text-amber-300"}>{JOB_STATUS[job.status] || job.status}</span>
@@ -1373,7 +1422,7 @@
         );
       }
 
-      function OnboardingHub({ session, onAsk, onViewsChanged }) {
+      function OnboardingHub({ session, onAsk, onViewsChanged, clients, clientNames, acting }) {
         const [items, setItems] = useState([]);
         const [over, setOver] = useState(false);
         const [pipe, setPipe] = useState({ busy: false, msg: "", err: null });
@@ -1383,7 +1432,8 @@
         const itemsRef = useRef([]);
         itemsRef.current = items;
         const api = (payload) => callBackend(session.url, session.token, payload);
-        const nowClient = () => window.__sammClient || window.__sammHome || undefined;
+        const [target, setTarget] = useState("");
+        const nowClient = () => target || acting || window.__sammClient || window.__sammHome || undefined;
         // Each upload is tied to the client it was started under, so switching client never breaks a running job.
         const apiFor = (client) => (payload) => callBackend(session.url, session.token, client ? { ...payload, client } : payload);
         const upd = (id, patch) => setItems((p) => p.map((i) => (i.id === id ? { ...i, ...patch } : i)));
@@ -1495,9 +1545,16 @@
           <div className="max-w-4xl mx-auto space-y-5" data-testid="onboarding-hub">
             <div className="bg-[#222222] border border-[#2D2D2D] rounded-xl p-6 shadow-xl space-y-4">
               <div>
-                <h2 className="text-lg font-bold text-white">📦 Data Onboarding</h2>
+                <h2 className="text-lg font-bold text-white">📦 Add data</h2>
                 <p className="text-xs text-[#A0A0A0] mt-1">Upload raw files. SAMM lands them in Bronze, structures them in Silver, suggests how their fields map to your standard names, and builds a Gold view the chat can query. csv, tsv, json, jsonl, txt and Excel are structured; other formats are archived untouched.</p>
               </div>
+              {(clients || []).length > 1 && (
+                <label className="flex flex-wrap items-center gap-2 text-xs text-[#C0C0C0]">Which client is this data for?
+                  <select data-testid="onb-client" aria-label="Client for this data" value={target || acting} onChange={(e) => setTarget(e.target.value)} className="bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-white">
+                    {clients.map((c) => <option key={c} value={c}>{(clientNames || {})[c] || c}</option>)}
+                  </select>
+                </label>
+              )}
               <label
                 htmlFor="onb-file"
                 onDragOver={(e) => { e.preventDefault(); setOver(true); }}
@@ -1589,6 +1646,29 @@
       // ------------------------------------------------------------------
       // Governance: users and per-client policy (admins only; the server enforces everything)
       // ------------------------------------------------------------------
+
+      function AddClientPanel({ api }) {
+        const [name, setName] = useState("");
+        const [msg, setMsg] = useState("");
+        const [err, setErr] = useState(null);
+        const add = async () => {
+          setErr(null); setMsg("");
+          try { const r = await api({ action: "client_add", name }); setMsg("Added " + r.name + ". Choose it in the Client box to add data for it."); setName(""); } catch (e) { setErr(e); }
+        };
+        return (
+          <div data-testid="add-client" className="bg-[#222222] border border-[#2D2D2D] rounded-xl p-5 shadow space-y-3">
+            <h3 className="text-sm font-bold text-white">Add a client</h3>
+            <p className="text-[11px] text-[#808080]">A client is one of your customers, for example Landsec or DOC. Their datasets are kept separate from every other client's.</p>
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <input aria-label="Client name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Client name" className="bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-white w-56 focus:outline-none focus:border-amber-500" />
+              <button aria-label="Add client" onClick={add} disabled={name.trim().length < 2} className="border border-[#3D3D3D] hover:border-amber-500 text-white px-3 py-1 rounded-md disabled:opacity-40">Add client</button>
+            </div>
+            <ErrBox err={err} />
+            {msg && <div data-testid="client-added" className="text-xs text-green-300">{msg}</div>}
+          </div>
+        );
+      }
+
       function UnassignedPanel({ api, tenants }) {
         const [rows, setRows] = useState(null);
         const [to, setTo] = useState({});
@@ -1809,6 +1889,7 @@
                 </div>
               )}
             </div>
+            {isSys && <AddClientPanel api={api} />}
             {isSys && <UnassignedPanel api={api} tenants={tenants} />}
           </div>
         );
@@ -1861,16 +1942,17 @@
           } catch (_) { /* the old numbers stay on the tile */ }
         };
         const [clients, setClients] = useState([]);
+        const [clientNames, setClientNames] = useState({});
         const [acting, setActing] = useState("");
+        const cname = (c) => clientNames[c] || c;
         useEffect(() => { window.__sammClient = null; window.__sammHome = identity.tenant_id; return () => { window.__sammClient = null; }; }, []);
         useEffect(() => {
-          if (demo || !identity.can_switch_client) return;
-          callBackend(session.url, session.token, { action: "clients" }).then((r) => { setClients(r.clients || []); setActing(r.home || ""); }).catch(() => {});
-        }, []);
+          if (demo) return;
+          callBackend(session.url, session.token, { action: "clients" }).then((r) => { setClients((r.clients || []).filter((c) => c !== "UNASSIGNED_NEW_CLIENT")); setClientNames(r.names || {}); setActing((a) => a || r.home || ""); }).catch(() => {});
+        }, [activeTab]);
         const switchClient = (c) => {
           window.__sammClient = c === identity.tenant_id ? null : c;
           setActing(c); setActiveView(""); setTalk(null); loadViews();
-          addMessage({ role: "assistant", text: "Now showing **" + c + "**. Questions, datasets and dashboards refer to this client. Your access is recorded in the audit log." });
         };
         const [talk, setTalk] = useState(null);   // what the last answer was about: { state, context }
         const loadViews = async () => {
@@ -2017,15 +2099,27 @@
                   <div className="bg-amber-600 px-3 py-1 rounded-lg text-white font-bold text-sm">SAMM</div>
                   <div>
                     <h1 className="font-bold text-base text-white tracking-wide">SAMM AI</h1>
-                    <p className="text-[10px] text-amber-500 font-mono">Serverless Core v2.5</p>
+                    <p className="text-[10px] text-amber-500 font-mono">Data intelligence</p>
                   </div>
                 </div>
+                {!demo && (
+                  <div data-testid="client-box" className="px-4 pt-4">
+                    <div className="text-[10px] uppercase tracking-wider text-[#808080] font-mono mb-1">Client</div>
+                    {clients.length > 1 ? (
+                      <select data-testid="client-switch" aria-label="Client" value={acting} onChange={(e) => switchClient(e.target.value)} className="w-full bg-[#2D2D2D] border border-[#3D3D3D] rounded-md px-2 py-2 text-sm text-white focus:outline-none focus:border-amber-500">
+                        {clients.map((c) => <option key={c} value={c}>{cname(c)}</option>)}
+                      </select>
+                    ) : (
+                      <div data-testid="client-fixed" className="w-full bg-[#2D2D2D] border border-[#3D3D3D] rounded-md px-2 py-2 text-sm text-white">{cname(acting || identity.tenant_id)}</div>
+                    )}
+                  </div>
+                )}
                 <nav className="p-4 space-y-2">
                   <button onClick={() => setActiveTab("chat")} className={navClass("chat", false)}>
-                    <span>💬 Cognitive Chat</span>
+                    <span>💬 Ask SAMM</span>
                   </button>
                   <button data-testid="nav-dashboard" onClick={() => setActiveTab("dashboard")} className={navClass("dashboard", false)}>
-                    <span>📊 Dashboard{tiles.length ? " (" + tiles.length + ")" : ""}</span>
+                    <span>📊 Reports{tiles.length ? " (" + tiles.length + ")" : ""}</span>
                   </button>
                   <button
                     onClick={() => canOnboard && setActiveTab("onboarding")}
@@ -2033,7 +2127,7 @@
                     title={canOnboard ? "" : "Requires Data Engineer or above"}
                     className={navClass("onboarding", !canOnboard)}
                   >
-                    <span>📦 Data Onboarding</span>
+                    <span>📦 Add data</span>
                   </button>
                   <button
                     onClick={() => canGovern && setActiveTab("governance")}
@@ -2041,7 +2135,7 @@
                     title={canGovern ? "" : "Requires a Client or System Administrator"}
                     className={navClass("governance", !canGovern)}
                   >
-                    <span>🛡️ Governance</span>
+                    <span>🛡️ Admin</span>
                   </button>
                 </nav>
               </div>
@@ -2063,15 +2157,7 @@
                   <div className="text-xs font-mono space-y-1">
                     <div data-testid="who-role" className="text-white">{ROLE_LABELS[identity.role] || identity.role}</div>
                     <div className="text-[#A0A0A0] truncate" title={identity.email}>{identity.email}</div>
-                    <div className="text-[#A0A0A0] truncate" title={identity.tenant_id}>{identity.all_clients ? "All clients (home: " + identity.tenant_id + ")" : "Client: " + identity.tenant_id}</div>
-                    {clients.length > 1 && (
-                      <label className="block text-[#A0A0A0]">Viewing client
-                        <select data-testid="client-switch" aria-label="Viewing client" value={acting} onChange={(e) => switchClient(e.target.value)} className="mt-1 w-full bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-white text-xs">
-                          {clients.map((c) => <option key={c}>{c}</option>)}
-                        </select>
-                      </label>
-                    )}
-                    <div data-testid="who-version" className="text-[#707070]">Server {identity.version || "older than v20 - redeploy the backend"} · Screen v20</div>
+                    <div data-testid="who-version" className="text-[#707070]">Server {identity.version || "older than v21 - redeploy the backend"} · Screen v21</div>
                     <button onClick={onSignOut} className="mt-2 text-[#A0A0A0] hover:text-white underline">Sign out</button>
                   </div>
                 )}
@@ -2083,14 +2169,14 @@
             <div className="flex-1 flex flex-col min-w-0 bg-[#191919]">
               <header className="h-16 border-b border-[#2D2D2D] px-6 flex items-center justify-between bg-[#1A1A1A]">
                 <div className="flex items-center space-x-3">
-                  <span className="text-xs uppercase bg-[#2D2D2D] text-amber-500 font-mono px-2.5 py-1 rounded border border-[#3D3D3D]">Active Console Context</span>
+                  <span data-testid="client-chip" className="text-xs bg-[#2D2D2D] text-amber-500 font-mono px-2.5 py-1 rounded border border-[#3D3D3D]">{demo ? "Demo" : cname(acting || identity.tenant_id)}</span>
                   {demo && <SimBadge>Demo mode: simulated</SimBadge>}
                 </div>
                 <div className="flex items-center space-x-4 text-xs font-mono text-[#A0A0A0]">
                   <span>👤 {String(role).toUpperCase()}</span>
                   {!demo && views.length > 1 && (
                     <label className="flex items-center space-x-1">
-                      <span>📚</span>
+                      <span>Dataset</span>
                       <select
                         aria-label="Dataset"
                         data-testid="dataset-select"
@@ -2098,17 +2184,16 @@
                         onChange={(e) => setActiveView(e.target.value)}
                         className="bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-xs text-white font-mono max-w-[220px] focus:outline-none focus:border-amber-500"
                       >
-                        {views.map((v) => <option key={v.name} value={v.name}>{v.name.replace(/^gold_ai_/, "")}</option>)}
+                        {views.map((v) => <option key={v.name} value={v.name} title={v.name}>{friendlyView(v.name, acting || identity.tenant_id)}</option>)}
                       </select>
                     </label>
                   )}
-                  <span>💾 Workgroup: shiftleft-superposition</span>
                   <button
                     onClick={() => setPanelOpen((o) => !o)}
                     data-testid="panel-toggle"
                     className="border border-[#3D3D3D] rounded px-2 py-1 hover:text-white hover:border-amber-500"
                   >
-                    📄 Artifacts {artifacts.length > 0 ? "(" + artifacts.length + ")" : ""}
+                    📄 Files {artifacts.length > 0 ? "(" + artifacts.length + ")" : ""}
                   </button>
                 </div>
               </header>
@@ -2173,13 +2258,16 @@
                 {activeTab === "onboarding" && !demo && (
                   <OnboardingHub
                     session={session}
+                    clients={clients}
+                    clientNames={clientNames}
+                    acting={acting || identity.tenant_id}
                     onViewsChanged={loadViews}
                     onAsk={(v) => {
                       loadViews();
                       setActiveView(v);
                       setTalk(null);
                       setActiveTab("chat");
-                      addMessage({ role: "assistant", text: "Now answering from the dataset **" + v.replace(/^gold_ai_/, "") + "**. Ask a question, for example: How many records are there?" });
+                      addMessage({ role: "assistant", text: "Now answering from the dataset **" + friendlyView(v, acting || identity.tenant_id) + "**. Ask a question, for example: How many records are there?" });
                     }}
                   />
                 )}
