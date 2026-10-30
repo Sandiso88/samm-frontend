@@ -576,7 +576,7 @@
                               </div>
                             )}
                           </td>
-                          <td>{badge(r.status)} {r.confidence > 0 && <span className="text-[10px] text-[#707070]">{Math.round(r.confidence * 100)}%</span>}</td>
+                          <td>{r.pii && <span data-testid={"pii-" + r.name} title={"Possible personal data: " + r.pii.join(", ") + ". Consider restricting this column in Governance."} className="mr-1 text-[10px] border border-red-500/60 text-red-300 rounded px-1">PII: {r.pii.join(", ").toLowerCase()}</span>}{badge(r.status)} {r.confidence > 0 && <span className="text-[10px] text-[#707070]">{Math.round(r.confidence * 100)}%</span>}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -769,6 +769,40 @@
                 <ul className="mt-1 space-y-0.5 font-mono">{job.log.map((l, i) => <li key={i}>{l.ts.slice(11, 19)} {l.msg}</li>)}</ul>
               </details>
             )}
+          </div>
+        );
+      }
+
+      function SelfTestPanel({ api, view }) {
+        const [rows, setRows] = useState([]);
+        const [busy, setBusy] = useState(false);
+        const [done, setDone] = useState(null);
+        const [err, setErr] = useState(null);
+        const run = async () => {
+          setBusy(true); setErr(null); setRows([]); setDone(null);
+          try {
+            let off = 0, all = [], total = 0;
+            while (off !== null && off !== undefined) {
+              const r = await api({ action: "selftest", offset: off, limit: 5, view: view || undefined });
+              all = all.concat(r.results || []); total = r.total; setRows(all); off = r.next;
+            }
+            setDone({ total, bad: all.filter((x) => !x.ok).length });
+          } catch (e) { setErr(e); } finally { setBusy(false); }
+        };
+        return (
+          <div data-testid="selftest-panel" className="bg-[#222222] border border-[#2D2D2D] rounded-xl p-5 shadow space-y-3">
+            <div>
+              <h3 className="text-sm font-bold text-white">Self-test</h3>
+              <p className="text-[11px] text-[#808080] mt-1">Asks SAMM about 24 different kinds of question, written from this dataset's real columns and values, and checks each query with Athena without scanning any data (no cost). A failure shows the exact reason.</p>
+            </div>
+            <button data-testid="selftest-run" disabled={busy} onClick={run} className="border border-[#3D3D3D] hover:border-amber-500 text-white text-xs px-3 py-1.5 rounded-md disabled:opacity-50">{busy ? "Testing..." : "Run self-test"}</button>
+            {err && <ErrBox err={err} />}
+            {done && <div data-testid="selftest-summary" className={"text-xs " + (done.bad ? "text-red-300" : "text-emerald-300")}>{done.total - done.bad} of {done.total} passed{done.bad ? " - " + done.bad + " need attention (listed below)" : ""}</div>}
+            <div className="space-y-1 text-xs font-mono">
+              {rows.map((r, i) => (
+                <div key={i} className="flex gap-2"><span className={r.ok ? "text-emerald-400" : "text-red-400"}>{r.ok ? "PASS" : "FAIL"}</span><span className="text-[#D0D0D0]">{r.question}</span>{r.error && <span className="text-red-300 break-all">{r.error}</span>}</div>
+              ))}
+            </div>
           </div>
         );
       }
@@ -1028,6 +1062,7 @@
 
             <GoldViews api={api} onAsk={onAsk} tick={viewsTick} />
             <TeachPanel api={api} />
+            <SelfTestPanel api={api} />
 
             {items.map((it) => {
               const idx = STAGES.findIndex((s) => s[0] === it.stage);
@@ -1116,7 +1151,7 @@
           try {
             const r = await api({ action: "policy_get", tenant_id: t });
             const p = r.policy || {};
-            setPol({ restricted: (p.restricted_columns || []).join(", "), caps: { ...(p.row_caps || {}) }, scan: p.scan_limit_gb == null ? "" : String(p.scan_limit_gb), auto: p.auto_approve_confidence == null ? "" : String(Math.round(p.auto_approve_confidence * 100)), mode: p.mapping_mode || "", meta: r });
+            setPol({ restricted: (p.restricted_columns || []).join(", "), caps: { ...(p.row_caps || {}) }, scan: p.scan_limit_gb == null ? "" : String(p.scan_limit_gb), auto: p.auto_approve_confidence == null ? "" : String(Math.round(p.auto_approve_confidence * 100)), mode: p.mapping_mode || "", pii: !!p.pii_scan, meta: r });
             setPolMsg("");
           } catch (e) { fail(e); }
         };
@@ -1147,7 +1182,7 @@
           try {
             const caps = {};
             Object.keys(pol.caps).forEach((r) => { if (pol.caps[r] !== "" && pol.caps[r] != null) caps[r] = Number(pol.caps[r]); });
-            await api({ action: "policy_save", tenant_id: policyTenant, policy: { restricted_columns: pol.restricted, row_caps: caps, scan_limit_gb: pol.scan === "" ? null : Number(pol.scan), auto_approve_confidence: pol.auto === "" ? null : Number(pol.auto), mapping_mode: pol.mode || null } });
+            await api({ action: "policy_save", tenant_id: policyTenant, policy: { restricted_columns: pol.restricted, row_caps: caps, scan_limit_gb: pol.scan === "" ? null : Number(pol.scan), auto_approve_confidence: pol.auto === "" ? null : Number(pol.auto), mapping_mode: pol.mode || null, pii_scan: !!pol.pii } });
             setPolMsg("Saved. It applies to the next request.");
           } catch (e) { fail(e); } finally { setBusy(false); }
         };
@@ -1258,6 +1293,11 @@
                   <label className="flex flex-col gap-1 text-[#A0A0A0] max-w-xs">Scan limit per question (GB)
                     <input aria-label="Scan limit" type="number" step="0.01" value={pol.scan} onChange={(e) => setPol({ ...pol, scan: e.target.value })} className={inp} placeholder={"platform " + pol.meta.platform_scan_limit_gb} />
                     <span className="text-[10px] text-[#707070]">Can only be lower than the platform limit ({pol.meta.platform_scan_limit_gb} GB). A lower limit is checked after the query; the platform limit is the hard stop.</span>
+                  </label>
+                  <label className="flex items-center gap-2 text-[#A0A0A0]">
+                    <input aria-label="Personal data scan" type="checkbox" checked={!!pol.pii} onChange={(e) => setPol({ ...pol, pii: e.target.checked })} />
+                    Scan new files for personal data (names, emails, phone numbers) when mapping
+                    <span className="text-[10px] text-[#707070]">Uses Amazon Comprehend (about $0.0001 per 100 characters scanned, a few text columns per file). It only suggests restricting a column; it never restricts one by itself.</span>
                   </label>
                   <label className="flex flex-col gap-1 text-[#A0A0A0] max-w-xs">How new files are mapped
                     <select aria-label="Mapping mode" value={pol.mode} onChange={(e) => setPol({ ...pol, mode: e.target.value })} className={inp}>
@@ -1400,6 +1440,7 @@
                 sqlArtifact: sqlArt,
                 meta: { role: d.role, tenant: d.tenant_id, cap: d.row_cap, truncated: d.truncated, finops: d.finops },
                 suggestions: Array.isArray(d.suggestions) ? d.suggestions.slice(0, 5) : [],
+                diagnostic: d.diagnostic || "",
                 simulated: demo,
                 timestamp: stamp(),
               },
@@ -1504,6 +1545,7 @@
                     <div data-testid="who-role" className="text-white">{ROLE_LABELS[identity.role] || identity.role}</div>
                     <div className="text-[#A0A0A0] truncate" title={identity.email}>{identity.email}</div>
                     <div className="text-[#A0A0A0] truncate" title={identity.tenant_id}>{identity.all_clients ? "All clients (home: " + identity.tenant_id + ")" : "Client: " + identity.tenant_id}</div>
+                    <div data-testid="who-version" className="text-[#707070]">Server {identity.version || "older than v15 - redeploy the backend"} · Screen v15</div>
                     <button onClick={onSignOut} className="mt-2 text-[#A0A0A0] hover:text-white underline">Sign out</button>
                   </div>
                 )}
@@ -1577,6 +1619,9 @@
                                   className="text-xs border border-[#3D3D3D] hover:border-amber-500 text-[#D0D0D0] px-3 py-1.5 rounded-full disabled:opacity-50">{sg}</button>
                               ))}
                             </div>
+                          )}
+                          {msg.diagnostic && (
+                            <div data-testid="diagnostic" className="text-[10px] text-amber-400/80 mt-2 font-mono">Engineer note: {msg.diagnostic}</div>
                           )}
                           {msg.meta && (
                             <div className="text-[10px] text-[#707070] mt-2 font-mono">
