@@ -58,6 +58,7 @@
       const ROLE_ROW_CAP = { viewer: 100, analyst: 500, engineer: 1000, admin: 1000, system_admin: 1000 };
       const CAN_ONBOARD = ["engineer", "admin", "system_admin"];
       const CAN_GOVERN = ["admin", "system_admin"];
+      const CAN_GOLD = ["analyst", "engineer", "admin", "system_admin"];
       const PERSONAS = [
         { value: "architect", label: "Architect" },
         { value: "guard", label: "Guard" },
@@ -636,6 +637,9 @@
               <img src={DATORE_LOGO} alt="datore" className="h-8" />
               <span className="text-[11px] text-[#78869b]">{cur.client || client} · updated {String(cur.updated || cur.created || "").slice(0, 16).replace("T", " ")} UTC · by {cur.by}</span>
             </div>
+            {cur.held && cur.held.flagged > 0 && (
+              <div data-testid="report-held" className="text-xs rounded-lg border border-amber-400/40 bg-amber-400/10 text-[#ffe08a] px-3 py-2">{cur.held.flagged} of {cur.held.total} rows are flagged for review{cur.held.hidden ? " and held out of these numbers" : " (they are still counted in these numbers)"}.</div>
+            )}
             <h2 data-testid="report-title" className="text-3xl md:text-4xl font-extrabold text-white tracking-tight" dangerouslySetInnerHTML={{ __html: dtHeadline(cur.title).replace('class="hl"', 'style="color:' + AC + '"') }} />
             <div data-testid="report-style" className="flex flex-wrap items-center gap-2 text-xs">
               {ren === null ? <button data-testid="report-rename" onClick={() => setRen(cur.title)} className="underline text-[#b8c2d6] hover:text-white">Rename</button> : (
@@ -2041,6 +2045,166 @@
         );
       }
 
+      // v26: My views - analysts (and engineers) build their own Gold views from datasets they were granted; engineers grant access
+      function MyViewsHub({ api, role, onViewsChanged, onUseView }) {
+        const isEng = ["engineer", "admin", "system_admin"].includes(role);
+        const [data, setData] = useState(null);
+        const [err, setErr] = useState(null);
+        const [busy, setBusy] = useState(false);
+        const [msg, setMsg] = useState("");
+        const blank = { dataset: "", label: "", calc: false, a: "", op: "*", b: "", cname: "", check: false, ccol: "", cmin: "", cmax: "" };
+        const [f, setF] = useState(blank);
+        const [delAsk, setDelAsk] = useState("");
+        const [queue, setQueue] = useState({});
+        const [grants, setGrants] = useState(null);
+        const [newAnalyst, setNewAnalyst] = useState("");
+        const load = async () => { try { setData(await api({ action: "my_datasets" })); setErr(null); } catch (e) { setErr(e); } };
+        const loadGrants = async () => { if (!isEng) return; try { setGrants(await api({ action: "grants_get" })); } catch (e) { setErr(e); } };
+        useEffect(() => { load(); loadGrants(); }, []);
+        const ds = data ? data.datasets : [];
+        const cur = ds.find((d) => d.dataset === f.dataset) || null;
+        const build = async () => {
+          setBusy(true); setMsg(""); setErr(null);
+          const rules = [];
+          if (f.calc) rules.push({ kind: "derive", column: f.a, column2: f.b, name: f.cname, params: { op: f.op }, status: "active", origin: "user" });
+          if (f.check) rules.push({ kind: "range", column: f.ccol, params: { min: f.cmin, max: f.cmax }, status: "active", origin: "user" });
+          try {
+            const r = await api({ action: "build_view", dataset: f.dataset, label: f.label, ...(rules.length ? { rules } : {}) });
+            setMsg("View '" + r.label + "' is ready (" + (r.rows == null ? "?" : r.rows) + " rows). It is private to you.");
+            setF(blank); await load(); onViewsChanged && onViewsChanged();
+          } catch (e) { setErr(e); } finally { setBusy(false); }
+        };
+        const rebuild = async (v) => { setBusy(true); setErr(null); try { await api({ action: "build_view", dataset: v.dataset, label: v.label }); setMsg("View '" + v.label + "' rebuilt."); await load(); onViewsChanged && onViewsChanged(); } catch (e) { setErr(e); } finally { setBusy(false); } };
+        const del = async (v) => { setBusy(true); setErr(null); try { await api({ action: "view_delete", view: v.name }); setDelAsk(""); setMsg("View deleted."); await load(); onViewsChanged && onViewsChanged(); } catch (e) { setErr(e); } finally { setBusy(false); } };
+        const share = async (v) => { setBusy(true); setErr(null); try { await api({ action: "view_share", view: v.name, shared: v.private }); await load(); onViewsChanged && onViewsChanged(); } catch (e) { setErr(e); } finally { setBusy(false); } };
+        const openQueue = async (d) => { setErr(null); setQueue((q) => ({ ...q, [d]: { busy: true } })); try { const r = await api({ action: "dq_queue", dataset: d }); setQueue((q) => ({ ...q, [d]: r })); } catch (e) { setQueue((q) => ({ ...q, [d]: null })); setErr(e); } };
+        const hold = async (d, on) => { setBusy(true); setErr(null); try { const r = await api({ action: "dq_hold", dataset: d, hold: on }); setMsg((on ? "Flagged rows are now held out of Gold." : "Flagged rows are released.") + " " + r.rebuilt_views + " personal view(s) rebuilt."); await openQueue(d); await load(); onViewsChanged && onViewsChanged(); } catch (e) { setErr(e); } finally { setBusy(false); } };
+        const setGrant = async (email, list) => { setErr(null); try { await api({ action: "grants_save", email, datasets: list }); await loadGrants(); } catch (e) { setErr(e); } };
+        const inp = "bg-[#2D2D2D] border border-[#3D3D3D] rounded-md py-1.5 px-2 text-sm text-white";
+        const bt = "border border-[#2c385d] hover:border-[#8ef4b2] text-white text-xs px-3 py-1.5 rounded-lg disabled:opacity-50";
+        const fields = cur ? cur.fields : [];
+        const canBuild = f.dataset && f.label.trim().length >= 2 && (!f.calc || (f.a && f.b && f.cname)) && (!f.check || (f.ccol && (f.cmin !== "" || f.cmax !== "")));
+        return (
+          <div data-testid="myviews" className="max-w-4xl mx-auto space-y-4">
+            <div className="rounded-2xl border border-[#2c385d] bg-[#1c2748] p-5 space-y-2">
+              <h2 className="text-lg font-bold text-white">My views</h2>
+              <p className="text-xs text-[#b8c2d6]">Build your own Gold views from datasets you have been given access to. Your views are private to you until a Data Engineer shares them. Rows a Data Engineer holds back stay held in every view.</p>
+              {err && <div data-testid="myviews-error" className="text-xs text-red-300">{err.message || String(err)}</div>}
+              {msg && <div data-testid="myviews-msg" className="text-xs text-[#8ef4b2]">{msg}</div>}
+            </div>
+
+            <div className="rounded-2xl border border-[#2c385d] bg-[#1c2748] p-5 space-y-3">
+              <h3 className="text-sm font-bold text-white">Build a view</h3>
+              {data && ds.length === 0 && <div data-testid="myviews-nodata" className="text-xs text-amber-300">No datasets are available to you yet. Ask your Data Engineer to grant you access.</div>}
+              <div className="flex flex-wrap gap-2 items-center">
+                <select data-testid="myviews-dataset" aria-label="Dataset" value={f.dataset} onChange={(e) => setF({ ...blank, dataset: e.target.value })} className={inp}>
+                  <option value="">Choose a dataset</option>
+                  {ds.map((d) => <option key={d.dataset} value={d.dataset}>{d.title || d.dataset}</option>)}
+                </select>
+                <input data-testid="myviews-name" aria-label="View name" placeholder="View name, e.g. monthly_spend" maxLength={40} value={f.label} onChange={(e) => setF({ ...f, label: e.target.value })} className={inp + " w-64"} />
+              </div>
+              {cur && (
+                <div className="space-y-2 text-xs text-[#b8c2d6]">
+                  <div>Columns: {cur.columns.join(", ")}</div>
+                  <label className="flex items-center gap-2"><input data-testid="myviews-calc" type="checkbox" checked={f.calc} onChange={(e) => setF({ ...f, calc: e.target.checked })} /> Add a calculated column</label>
+                  {f.calc && (
+                    <div className="flex flex-wrap gap-2 items-center pl-5">
+                      <select aria-label="First column" value={f.a} onChange={(e) => setF({ ...f, a: e.target.value })} className={inp}><option value="">column</option>{fields.map((x) => <option key={x.source} value={x.source}>{x.label}</option>)}</select>
+                      <select aria-label="Operation" value={f.op} onChange={(e) => setF({ ...f, op: e.target.value })} className={inp}>{["+", "-", "*", "/"].map((o) => <option key={o} value={o}>{o}</option>)}</select>
+                      <select aria-label="Second column" value={f.b} onChange={(e) => setF({ ...f, b: e.target.value })} className={inp}><option value="">column</option>{fields.map((x) => <option key={x.source} value={x.source}>{x.label}</option>)}</select>
+                      <input aria-label="New column name" placeholder="new column name" maxLength={40} value={f.cname} onChange={(e) => setF({ ...f, cname: e.target.value })} className={inp + " w-44"} />
+                    </div>
+                  )}
+                  <label className="flex items-center gap-2"><input data-testid="myviews-check" type="checkbox" checked={f.check} onChange={(e) => setF({ ...f, check: e.target.checked })} /> Flag values outside a range</label>
+                  {f.check && (
+                    <div className="flex flex-wrap gap-2 items-center pl-5">
+                      <select aria-label="Check column" value={f.ccol} onChange={(e) => setF({ ...f, ccol: e.target.value })} className={inp}><option value="">column</option>{fields.map((x) => <option key={x.source} value={x.source}>{x.label}</option>)}</select>
+                      <input aria-label="Minimum" placeholder="min" value={f.cmin} onChange={(e) => setF({ ...f, cmin: e.target.value })} className={inp + " w-24"} />
+                      <input aria-label="Maximum" placeholder="max" value={f.cmax} onChange={(e) => setF({ ...f, cmax: e.target.value })} className={inp + " w-24"} />
+                    </div>
+                  )}
+                </div>
+              )}
+              <button data-testid="myviews-build" disabled={busy || !canBuild} onClick={build} className="bg-[#8ef4b2] text-[#13214a] font-bold text-sm px-4 py-2 rounded-lg disabled:opacity-50">{busy ? "Working…" : "Build view"}</button>
+            </div>
+
+            <div className="rounded-2xl border border-[#2c385d] bg-[#1c2748] p-5 space-y-2">
+              <h3 className="text-sm font-bold text-white">{isEng ? "Personal views in this client" : "Your views"}</h3>
+              {data && data.views.length === 0 && <div data-testid="myviews-empty" className="text-xs text-[#78869b]">No personal views yet.</div>}
+              {data && data.views.map((v) => (
+                <div key={v.name} data-testid="myviews-row" className="flex flex-wrap items-center gap-3 text-xs border-t border-[#2c385d] pt-2">
+                  <span className="font-bold text-white">{v.label}</span>
+                  <span className="text-[#78869b]">{v.dataset ? v.dataset.replace(/^silver_/, "") : ""} · {v.owner || "?"} · {v.rules} own rule(s)</span>
+                  <span data-testid="myviews-vis" className={v.private ? "text-[#b8c2d6]" : "text-[#8ef4b2]"}>{v.private ? "Private" : "Shared"}</span>
+                  {v.stale && <span data-testid="myviews-stale" className="text-amber-300">Needs rebuild (the dataset changed)</span>}
+                  <span className="flex gap-2 ml-auto">
+                    <button data-testid="myviews-use" onClick={() => onUseView && onUseView(v.name)} className={bt}>Ask about it</button>
+                    <button data-testid="myviews-rebuild" disabled={busy} onClick={() => rebuild(v)} className={bt}>Rebuild</button>
+                    {isEng && <button data-testid="myviews-share" disabled={busy} onClick={() => share(v)} className={bt}>{v.private ? "Share" : "Make private"}</button>}
+                    {delAsk === v.name ? (
+                      <span className="flex gap-2 items-center"><span className="text-[#ffe08a]">Delete this view?</span><button data-testid="myviews-del-yes" onClick={() => del(v)} className="underline text-red-300">Yes, delete</button><button onClick={() => setDelAsk("")} className="underline text-[#b8c2d6]">No</button></span>
+                    ) : <button data-testid="myviews-del" onClick={() => setDelAsk(v.name)} className="text-[#78869b] underline">Delete</button>}
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            {ds.length > 0 && (
+              <div className="rounded-2xl border border-[#2c385d] bg-[#1c2748] p-5 space-y-3">
+                <h3 className="text-sm font-bold text-white">Review queue: rows that break a rule</h3>
+                <p className="text-xs text-[#b8c2d6]">Flagged rows stay in the data. {isEng ? "You decide whether they are held out of Gold totals." : "A Data Engineer decides whether they are held out of Gold totals."}</p>
+                {ds.map((d) => {
+                  const q = queue[d.dataset];
+                  return (
+                    <div key={d.dataset} data-testid="queue-ds" className="text-xs border-t border-[#2c385d] pt-2 space-y-1">
+                      <div className="flex items-center gap-3"><span className="font-bold text-white">{d.title || d.dataset}</span><button data-testid="queue-open" disabled={q && q.busy} onClick={() => openQueue(d.dataset)} className={bt}>{q && q.busy ? "Checking…" : "Check flagged rows"}</button></div>
+                      {q && !q.busy && (
+                        <div data-testid="queue-result" className="space-y-1">
+                          <div className="text-[#b8c2d6]">{q.flagged} of {q.total} rows flagged · {q.clean} clean · {q.held ? "flagged rows are HELD out of Gold" : "flagged rows are included in Gold"}</div>
+                          {q.note && <div className="text-[#78869b]">{q.note}</div>}
+                          {(q.by_rule || []).map((r) => <div key={r.id} className="text-[#b8c2d6]">• {r.rule}: {r.rows} row(s)</div>)}
+                          {(q.sample || []).length > 0 && (
+                            <div className="overflow-x-auto"><table className="text-[11px] text-[#b8c2d6]"><thead><tr>{Object.keys(q.sample[0]).map((k) => <th key={k} className="text-left pr-3 text-[#78869b]">{k}</th>)}</tr></thead><tbody>{q.sample.slice(0, 8).map((r, i) => <tr key={i}>{Object.keys(q.sample[0]).map((k) => <td key={k} className="pr-3">{String(r[k] == null ? "" : r[k])}</td>)}</tr>)}</tbody></table></div>
+                          )}
+                          {q.can_decide && q.flagged > 0 && (
+                            <button data-testid="queue-hold" disabled={busy} onClick={() => hold(d.dataset, !q.held)} className={bt}>{q.held ? "Release flagged rows" : "Hold flagged rows out of Gold"}</button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {isEng && grants && (
+              <div data-testid="grants" className="rounded-2xl border border-[#2c385d] bg-[#1c2748] p-5 space-y-3">
+                <h3 className="text-sm font-bold text-white">Who can build from which dataset</h3>
+                <p className="text-xs text-[#b8c2d6]">Analysts see only datasets you tick here, and only datasets that already have their main Gold view.</p>
+                {grants.datasets.length === 0 && <div className="text-xs text-amber-300">No dataset is ready yet. Build a dataset's Gold view in Onboarding first.</div>}
+                {grants.analysts.map((a) => {
+                  const have = grants.grants[a] || [];
+                  return (
+                    <div key={a} data-testid="grant-row" className="text-xs border-t border-[#2c385d] pt-2">
+                      <div className="font-bold text-white mb-1">{a}</div>
+                      <div className="flex flex-wrap gap-3">
+                        {grants.datasets.map((d) => (
+                          <label key={d.dataset} className="flex items-center gap-1 text-[#b8c2d6]"><input data-testid="grant-box" type="checkbox" checked={have.includes(d.dataset)} onChange={(e) => setGrant(a, e.target.checked ? [...have, d.dataset] : have.filter((x) => x !== d.dataset))} />{d.title || d.dataset}</label>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+                <div className="flex gap-2 items-center">
+                  <input data-testid="grant-email" aria-label="Analyst email" placeholder="analyst email" value={newAnalyst} onChange={(e) => setNewAnalyst(e.target.value)} className={inp + " w-64"} />
+                  <button data-testid="grant-add" disabled={!newAnalyst.includes("@") || grants.datasets.length === 0} onClick={async () => { await setGrant(newAnalyst.trim(), [grants.datasets[0].dataset]); setNewAnalyst(""); }} className={bt}>Add analyst (first dataset)</button>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      }
+
       function OnboardingHub({ session, onAsk, onViewsChanged, clients, clientNames, acting }) {
         const [items, setItems] = useState([]);
         const [over, setOver] = useState(false);
@@ -2662,7 +2826,9 @@
 
         const canOnboard = CAN_ONBOARD.includes(role);
         const canGovern = CAN_GOVERN.includes(role);
+        const canGold = CAN_GOLD.includes(role);
         useEffect(() => {
+          if (activeTab === "myviews" && !canGold) setActiveTab("chat");
           if (activeTab === "onboarding" && !canOnboard) setActiveTab("chat");
           if (activeTab === "governance" && !canGovern) setActiveTab("chat");
         }, [role]);
@@ -2863,6 +3029,9 @@
                   <button data-testid="nav-dashboard" onClick={() => setActiveTab("dashboard")} className={navClass("dashboard", false)}>
                     <span>📊 Reports{tiles.length ? " (" + tiles.length + ")" : ""}</span>
                   </button>
+                  <button data-testid="nav-myviews" onClick={() => canGold && setActiveTab("myviews")} disabled={!canGold} title={canGold ? "" : "Requires Analyst or above"} className={navClass("myviews", !canGold)}>
+                    <span>🗂️ My views</span>
+                  </button>
                   <button
                     onClick={() => canOnboard && setActiveTab("onboarding")}
                     disabled={!canOnboard}
@@ -2899,7 +3068,7 @@
                   <div className="text-xs font-mono space-y-1">
                     <div data-testid="who-role" className="text-white">{ROLE_LABELS[identity.role] || identity.role}</div>
                     <div className="text-[#A0A0A0] truncate" title={identity.email}>{identity.email}</div>
-                    <div data-testid="who-version" className="text-[#707070]">Server {identity.version || "older than v25 - redeploy the backend"} · Screen v25</div>
+                    <div data-testid="who-version" className="text-[#707070]">Server {identity.version || "older than v26 - redeploy the backend"} · Screen v26</div>
                     <button onClick={onSignOut} className="mt-2 text-[#A0A0A0] hover:text-white underline">Sign out</button>
                   </div>
                 )}
@@ -3050,6 +3219,10 @@
                       </button>
                     </div>
                   </div>
+                )}
+
+                {activeTab === "myviews" && !demo && (
+                  <MyViewsHub role={role} api={(p) => callBackend(session.url, session.token, p)} onViewsChanged={loadViews} onUseView={(v) => { setActiveView(v); setActiveTab("chat"); }} />
                 )}
 
                 {activeTab === "dashboard" && (
