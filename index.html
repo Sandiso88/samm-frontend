@@ -1518,6 +1518,7 @@
         const [mode, setMode] = useState("replace");
         const [key, setKey] = useState("");
         const [name, setName] = useState("");
+        const [newTitle, setNewTitle] = useState("");
         const [plan, setPlan] = useState(null);
         const [msg, setMsg] = useState("");
         const [err, setErr] = useState("");
@@ -1540,9 +1541,9 @@
         const apply = async () => {
           setBusy(true); setErr("");
           try {
-            const r = await api({ action: "dataset_rename_id", dataset, new_name: name, apply: true });
+            const r = await api({ action: "dataset_rename_id", dataset, new_name: name, apply: true, ...(newTitle.trim() ? { title: newTitle.trim() } : {}) });
             setMsg("Renamed to " + friendlyDs(r.new) + ". " + (r.reports_moved || 0) + " report(s), " + (r.personal_views_rebuilt || 0) + " personal view(s) moved. Uploading the original file again will update it.");
-            setPlan(null); window.dispatchEvent(new CustomEvent("samm-titles-changed")); window.dispatchEvent(new CustomEvent("samm-datasets-changed"));
+            setPlan(null); window.dispatchEvent(new CustomEvent("samm-titles-changed")); window.dispatchEvent(new CustomEvent("samm-datasets-changed", { detail: { msg: "Renamed to " + friendlyDs(r.new) + ". The Gold view, history card, " + (r.reports_moved || 0) + " report(s) and " + (r.personal_views_rebuilt || 0) + " personal view(s) now use the new name. Uploading the original file again will update it." } }));
           } catch (e) { setErr(e.message || "Could not rename."); } finally { setBusy(false); }
         };
         const PL = { views: "Gold view(s)", personal_views: "personal view(s)", reports: "report(s)", links: "link(s)", drill_downs: "drill-down(s)", access_grants: "analyst access grant(s)" };
@@ -1553,8 +1554,9 @@
               <div className="border border-[#2D2D2D] rounded-lg p-3 bg-[#1B1B1B] space-y-3 text-xs text-[#C0C0C0]">
                 <div className="space-y-2">
                   <div className="font-semibold text-white">Rename everywhere</div>
-                  <div>Changes the dataset's name and everything attached to it: data, Gold views, mapping, rules, reports, links and drill-downs, analyst access. Uploading the original file again updates the renamed dataset.</div>
+                  <div>Changes the dataset's name once and carries it all the way to Gold: data, Gold views, mapping, rules, history card, reports, links and drill-downs, analyst access. Uploading the original file again updates the renamed dataset.</div>
                   <div className="flex flex-wrap gap-2 items-center">
+                    <input data-testid="adv-title" aria-label="New dataset title" value={newTitle} maxLength={80} onChange={(e) => setNewTitle(e.target.value)} placeholder="Title (optional), e.g. Landsec - Purchase Orders" className={inp + " w-72"} />
                     <input data-testid="adv-name" aria-label="New dataset name" value={name} maxLength={60} onChange={(e) => { setName(e.target.value); setPlan(null); }} placeholder="e.g. dim_po (the client prefix is added for you)" className={inp + " w-72"} />
                     <button data-testid="adv-check" disabled={busy || !name.trim()} onClick={check} className={bt}>Check what will change</button>
                   </div>
@@ -1655,6 +1657,20 @@
         queued: "Starting...", running: "SAMM is working on it...", waiting: "Waiting for the Excel conversion to finish...",
         needs_approval: "Needs your confirmation", done: "Done", failed: "Stopped with an error",
       };
+      function JobHeading({ file, datasets }) {
+        const [, tick] = useState(0);
+        useEffect(() => {
+          const on = () => tick((n) => n + 1);
+          window.addEventListener("samm-titles-changed", on); window.addEventListener("samm-titles-ready", on);
+          return () => { window.removeEventListener("samm-titles-changed", on); window.removeEventListener("samm-titles-ready", on); };
+        }, []);
+        const ents = Object.entries(datasets || {});
+        const one = ents.length === 1 ? ents[0] : null;
+        const name = one ? ((one[1].view && titleOf(one[1].view)) || friendlyDs(one[0])) : "";
+        return one
+          ? <div data-testid="job-heading" className="text-sm font-mono truncate" title={file}><span className="text-white font-semibold">{name}</span> <span className="text-[#808080]">({file})</span></div>
+          : <div data-testid="job-heading" className="text-sm text-white font-mono truncate">{file}</div>;
+      }
       function JobCard({ job, api, onUpdate, onAsk, onViewsChanged, onDismiss }) {
         const live = ["queued", "running", "waiting"].includes(job.status);
         const [busy, setBusy] = useState(false);
@@ -2394,6 +2410,16 @@
         const liveItem = (i) => (i.job ? ["queued", "running", "waiting"].includes(i.job.status) : (!i.done && !i.error && ["upload", "bronze"].includes(i.stage)));
         const anyLive = items.some(liveItem);
         const dismiss = (id) => setItems((p) => p.filter((i) => i.id !== id));
+        const [renameMsg, setRenameMsg] = useState("");
+        useEffect(() => {   // a dataset was renamed: bring the cards on this screen up to date so their buttons point at the new name
+          const on = (e) => {
+            if (e && e.detail && e.detail.msg) setRenameMsg(e.detail.msg);
+            itemsRef.current.forEach(async (i) => { if (i.job) { try { const r = await apiFor(i.client)({ action: "job_get", id: i.job.id }); if (r && r.job) upd(i.id, { job: r.job }); } catch (_) { /* the card keeps its old text */ } } });
+            if (history.open) loadHistory(history.limit);
+          };
+          window.addEventListener("samm-datasets-changed", on);
+          return () => window.removeEventListener("samm-datasets-changed", on);
+        });
 
         const loadMapping = async (id, ds) => {
           setItems((p) => p.map((i) => (i.id === id ? { ...i, datasets: { ...i.datasets, [ds]: { open: true } } } : i)));
@@ -2567,6 +2593,7 @@
               <span className="text-[11px] text-[#808080]">{items.length === 0 ? "Your list is empty. Drop a file above to start." : items.length + " on this screen. Clearing only tidies the screen."}</span>
             </div>
 
+            {renameMsg && <div data-testid="rename-banner" className="flex items-center justify-between gap-3 text-xs bg-[#10241A] border border-green-800 rounded-lg px-4 py-2 text-green-300"><span>✓ {renameMsg}</span><button onClick={() => setRenameMsg("")} className="underline text-[#A0A0A0] hover:text-white">Hide</button></div>}
             {autoMsg && <div data-testid="auto-link-banner" className="text-xs bg-[#10241A] border border-green-800 rounded-lg px-4 py-2 text-green-300">🔗 {autoMsg}</div>}
             {items.some((i) => i.done) && (
               <div data-testid="done-banner" className="flex flex-wrap items-center gap-3 text-xs bg-[#10241A] border border-green-800 rounded-lg px-4 py-2 text-green-300">
@@ -2580,7 +2607,7 @@
               return (
                 <div key={it.id} className="bg-[#222222] border border-[#2D2D2D] rounded-xl p-5 shadow space-y-3" data-testid="onb-item">
                   <div className="flex justify-between items-center gap-3">
-                    <div className="min-w-0"><div className="text-sm text-white font-mono truncate">{it.name}</div>
+                    <div className="min-w-0">{it.job ? <JobHeading file={it.name} datasets={it.job.datasets} /> : <div className="text-sm text-white font-mono truncate">{it.name}</div>}
                       {it.dsName && <div data-testid="item-dsname" className="text-[11px] text-[#A0A0A0] truncate">Dataset: <b className="text-white">{String(it.dsName).replace(/^silver_/, "")}</b>{it.willUpdate ? (it.aliasUsed ? " · updates the renamed dataset" : " · updates the existing dataset") : " · new dataset"}</div>}</div>
                     <div className="flex items-center gap-3 shrink-0">
                       {it.client && <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-[#333] text-[#BBB]" data-testid="item-client">client: {it.client}</span>}
@@ -2631,7 +2658,7 @@
                 {sortedHistory.map((j) => (
                   <div key={j.id} className="border border-[#2D2D2D] rounded-lg p-4 bg-[#1D1D1D] space-y-2" data-testid="job-row">
                     <div className="flex flex-wrap items-baseline justify-between gap-2">
-                      <div className="text-sm text-white font-mono truncate">{j.file}</div>
+                      <JobHeading file={j.file} datasets={j.datasets} />
                       <div data-testid="job-time" className="text-[11px] text-[#A0A0A0] font-mono">{fmtWhen(j.created)}{j.updated && j.updated !== j.created ? " · last update " + fmtWhen(j.updated) : ""}</div>
                     </div>
                     <JobCard job={j} api={apiFor(history.client)} onUpdate={mergeJob} onAsk={onAsk} onViewsChanged={viewsChanged} onDismiss={() => setHistory((h) => ({ ...h, list: h.list.filter((x) => x.id !== j.id) }))} />
@@ -3048,6 +3075,7 @@
             const r = await callBackend(session.url, session.token, { action: "views" });
             const tmap = {}; (r.views || []).forEach((v) => { if (v.title) tmap[v.name] = { title: v.title, subject: v.subject || "" }; });
             window.__sammTitles = tmap;
+            window.dispatchEvent(new CustomEvent("samm-titles-ready"));
             setViews(r.views || []);
             setDefaultView(r.default || "");
           } catch (_) {
@@ -3308,7 +3336,7 @@
                   <div className="text-xs font-mono space-y-1">
                     <div data-testid="who-role" className="text-white">{ROLE_LABELS[identity.role] || identity.role}</div>
                     <div className="text-[#A0A0A0] truncate" title={identity.email}>{identity.email}</div>
-                    <div data-testid="who-version" className="text-[#707070]">Server {identity.version || "older than v27 - redeploy the backend"} · Screen v27</div>
+                    <div data-testid="who-version" className="text-[#707070]">Server {identity.version || "older than v28 - redeploy the backend"} · Screen v28</div>
                     <button onClick={onSignOut} className="mt-2 text-[#A0A0A0] hover:text-white underline">Sign out</button>
                   </div>
                 )}
