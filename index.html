@@ -42,6 +42,7 @@
 
       // Roles are DISPLAY labels only. Real permissions are enforced by the backend from your token.
       const ROLE_LABELS = {
+        report_viewer: "Report viewer",
         viewer: "Viewer",
         analyst: "Data Analyst",
         engineer: "Data Engineer",
@@ -49,13 +50,14 @@
         system_admin: "System Administrator",
       };
       const ROLE_HELP = {
+        report_viewer: "Opens and drills into only the reports an engineer has shared with them. Nothing else.",
         viewer: "Asks questions. Small row cap.",
         analyst: "Larger row cap. Power BI DAX and Sisense output.",
         engineer: "Uploads files, runs the pipeline, maps fields, builds Gold views.",
         admin: "Manages the users and policies of their own client.",
         system_admin: "Platform owner. Every client, every role.",
       };
-      const ROLE_ROW_CAP = { viewer: 100, analyst: 500, engineer: 1000, admin: 1000, system_admin: 1000 };
+      const ROLE_ROW_CAP = { report_viewer: 100, viewer: 100, analyst: 500, engineer: 1000, admin: 1000, system_admin: 1000 };
       const CAN_ONBOARD = ["engineer", "admin", "system_admin"];
       const CAN_GOVERN = ["admin", "system_admin"];
       const CAN_GOLD = ["analyst", "engineer", "admin", "system_admin"];
@@ -65,6 +67,20 @@
         { value: "finops", label: "FinOps" },
       ];
 
+      const friendlyDs = (name, title) => title || String(name || "").replace(/^silver_/, "").replace(/_/g, " ");
+      const callPublic = async (url, payload) => {   // for the invitation page: the code in the link is the only credential
+        let res;
+        try { res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }); }
+        catch (e) { throw new ApiError("Could not reach SAMM. Check your connection and try the link again.", [], 0); }
+        let data = {};
+        try { data = await res.json(); } catch (_) { data = {}; }
+        if (res.ok && !data.error) return data;
+        throw new ApiError(data.error || data.message || ("Request failed (HTTP " + res.status + ")."), [], res.status);
+      };
+      const REMEMBER_KEY = "samm_device";
+      const rememberGet = () => { try { const v = JSON.parse(localStorage.getItem(REMEMBER_KEY) || "null"); return v && v.url && v.token ? v : null; } catch (_) { return null; } };
+      const rememberSet = (url, token) => { try { localStorage.setItem(REMEMBER_KEY, JSON.stringify({ url, token })); } catch (_) { /* optional */ } };
+      const rememberClear = () => { try { localStorage.removeItem(REMEMBER_KEY); } catch (_) { /* optional */ } };
       const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
       // ------------------------------------------------------------------
@@ -604,7 +620,7 @@
         );
       }
 
-      function ReportView({ doc, api, client, onBack, onChanged, onAsk, canManage }) {
+      function ReportView({ doc, api, client, onBack, onChanged, onAsk, canManage, viewerOnly }) {
         const [delAsk, setDelAsk] = useState(false);
         const [cur, setCur] = useState(doc);
         const [busy, setBusy] = useState(false);
@@ -641,7 +657,7 @@
               <div data-testid="report-held" className="text-xs rounded-lg border border-amber-400/40 bg-amber-400/10 text-[#ffe08a] px-3 py-2">{cur.held.flagged} of {cur.held.total} rows are flagged for review{cur.held.hidden ? " and held out of these numbers" : " (they are still counted in these numbers)"}.</div>
             )}
             <h2 data-testid="report-title" className="text-3xl md:text-4xl font-extrabold text-white tracking-tight" dangerouslySetInnerHTML={{ __html: dtHeadline(cur.title).replace('class="hl"', 'style="color:' + AC + '"') }} />
-            <div data-testid="report-style" className="flex flex-wrap items-center gap-2 text-xs">
+            {!viewerOnly && <div data-testid="report-style" className="flex flex-wrap items-center gap-2 text-xs">
               {ren === null ? <button data-testid="report-rename" onClick={() => setRen(cur.title)} className="underline text-[#b8c2d6] hover:text-white">Rename</button> : (
                 <span className="flex items-center gap-2">
                   <input data-testid="report-rename-input" aria-label="Report name" value={ren} maxLength={120} onChange={(e) => setRen(e.target.value)} className="bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-white w-64 focus:outline-none" />
@@ -651,10 +667,10 @@
               )}
               <span className="text-[#78869b]">Colour</span>
               {ACCENT_SWATCHES.map(([n, hex]) => <button key={n} data-testid={"report-color-" + n} title={n} aria-label={"Colour " + n} onClick={() => update({ accent: hex })} className="w-5 h-5 rounded-full border-2" style={{ background: hex, borderColor: hex === AC ? "#fff" : "transparent" }} />)}
-            </div>
+            </div>}
             <div className="flex flex-wrap gap-2">
               <button onClick={onBack} className={bt} data-testid="report-back">← All reports</button>
-              {cur.kind === "dataset" && <button onClick={refresh} disabled={busy} className={bt} data-testid="report-refresh">{busy ? "Refreshing..." : "Refresh numbers"}</button>}
+              {cur.kind === "dataset" && !viewerOnly && <button onClick={refresh} disabled={busy} className={bt} data-testid="report-refresh">{busy ? "Refreshing..." : "Refresh numbers"}</button>}
               <button onClick={() => { try { navigator.clipboard.writeText(link); setMsg("Link copied."); } catch (_) { setMsg(link); } }} className={bt} data-testid="report-copy">Copy link</button>
               {canManage && (delAsk
                 ? <span className="flex items-center gap-2 text-xs"><span className="text-amber-200">Delete this report for everyone?</span><button data-testid="report-del-yes" onClick={async () => { try { await api({ action: "report_delete", id: cur.id }); if (onChanged) onChanged(); onBack(); } catch (e) { setMsg(e.message || "Could not delete."); } }} className="underline text-red-300">Yes, delete</button><button onClick={() => setDelAsk(false)} className="underline text-[#b8c2d6]">No</button></span>
@@ -665,8 +681,9 @@
                   <option value="">Drill down...</option>{hiers.map((h) => <option key={h.name} value={h.name}>{h.name}</option>)}
                 </select>
               )}
-              {cur.dataset && <button data-testid="report-ask" onClick={() => openSplit({ dataset: cur.dataset, reportId: cur.id })} className={bt}>Ask SAMM</button>}
+              {cur.dataset && !viewerOnly && <button data-testid="report-ask" onClick={() => openSplit({ dataset: cur.dataset, reportId: cur.id })} className={bt}>Ask SAMM</button>}
             </div>
+            {canManage && !viewerOnly && <ReportShare api={api} reportId={cur.id} />}
             {msg && <div data-testid="report-msg" className="text-[11px] text-[#8ef4b2]">{msg}</div>}
             {drillName && <DrillView api={api} name={drillName} reportId={cur.id} onClose={() => setDrillName("")} />}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -678,7 +695,7 @@
                     {single.length > 0 && <div className="flex flex-wrap gap-3">{single.map((c) => <div key={c} className="bg-[#8ef4b2]/10 border border-[#8ef4b2]/30 rounded-xl px-4 py-2"><div className="text-2xl font-extrabold" style={{ color: AC }}>{fmtNum(numOf(t.rows[0][c]))}</div><div className="text-[11px] text-[#78869b]">{c}</div></div>)}</div>}
                     {t.chart !== false && <AutoChart rows={t.rows} title={t.title} />}
                     <DataTable rows={t.rows.slice(0, 8)} />
-                    <button data-testid="tile-remove-report" onClick={() => update({ remove_tile: i })} className="text-[10px] text-[#78869b] hover:text-white underline">Remove tile</button>
+                    {!viewerOnly && <button data-testid="tile-remove-report" onClick={() => update({ remove_tile: i })} className="text-[10px] text-[#78869b] hover:text-white underline">Remove tile</button>}
                   </div>
                 );
               })}
@@ -687,7 +704,7 @@
         );
       }
 
-      function DashboardHub({ tiles, onRemove, onRefresh, onAsk, client, onPublished, api, openId, onOpenHandled, canManage }) {
+      function DashboardHub({ tiles, onRemove, onRefresh, onAsk, client, onPublished, api, openId, onOpenHandled, canManage, viewerOnly }) {
         const [confirmDel, setConfirmDel] = useState("");
         const [dups, setDups] = useState(null);
         const [pubTitle, setPubTitle] = useState("");
@@ -721,7 +738,7 @@
           } catch (e) { setPubMsg("Could not create the package: " + (e && e.message ? e.message : e)); }
         };
         const [busy, setBusy] = useState("");
-        if (viewing) return <ReportView canManage={canManage} doc={viewing} api={api} client={client} onBack={() => { setViewing(null); loadReports(); }} onChanged={loadReports} onAsk={(ds) => onAsk && onAsk("Describe the dataset " + String(ds).replace(/^silver_/, ""))} />;
+        if (viewing) return <ReportView viewerOnly={viewerOnly} canManage={canManage} doc={viewing} api={api} client={client} onBack={() => { setViewing(null); loadReports(); }} onChanged={loadReports} onAsk={(ds) => onAsk && onAsk("Describe the dataset " + String(ds).replace(/^silver_/, ""))} />;
         return (
           <div data-testid="dashboard" className="max-w-5xl mx-auto space-y-4 rounded-3xl p-6 border border-[#2c385d]" style={{ background: "radial-gradient(900px 380px at 75% -10%, #1d3a6b 0%, transparent 60%), linear-gradient(180deg,#13214a,#0f1c3f)" }}>
             <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -767,7 +784,8 @@
                   {dups && dups.length > 0 && <span className="flex items-center gap-2"><span data-testid="dedupe-found" className="text-amber-200">{dups.length} older cop{dups.length === 1 ? "y" : "ies"} of the same report.</span><button data-testid="dedupe-apply" onClick={async () => { try { await api({ action: "report_dedupe", apply: true }); setDups(null); loadReports(); } catch (e) { setRepErr(e.message || "Could not remove."); } }} className="underline text-red-300">Keep the newest, remove the rest</button></span>}
                 </div>
               )}
-              {reports.length === 0 && <div className="text-[11px] text-[#78869b]">Nothing published yet. Publish from a dataset (Onboarding) or pin charts below and choose "SAMM report link".</div>}
+              {reports.length === 0 && viewerOnly && <div data-testid="rv-empty" className="text-[11px] text-[#78869b]">No report has been shared with you yet. Ask your Data Engineer to give you access to one.</div>}
+              {reports.length === 0 && !viewerOnly && <div className="text-[11px] text-[#78869b]">Nothing published yet. Publish from a dataset (Onboarding) or pin charts below and choose "SAMM report link".</div>}
               {reports.map((r) => (
                 <div key={r.id} data-testid="report-row" className="flex flex-wrap items-center gap-3 text-xs">
                   <span className="text-white font-semibold">{r.title}</span>
@@ -779,7 +797,7 @@
                 </div>
               ))}
             </div>
-            {tiles.length === 0 && <div className="bg-white/5 border border-[#2c385d] rounded-2xl p-6 text-sm text-[#b8c2d6]">Nothing pinned yet. Ask a question in the chat, then choose <b>Pin to dashboard</b> under its chart.</div>}
+            {tiles.length === 0 && !viewerOnly && <div className="bg-white/5 border border-[#2c385d] rounded-2xl p-6 text-sm text-[#b8c2d6]">Nothing pinned yet. Ask a question in the chat, then choose <b>Pin to dashboard</b> under its chart.</div>}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               {tiles.map((t) => (
                 <div key={t.id} data-testid="tile" className="bg-white/5 border border-[#2c385d] rounded-2xl p-4">
@@ -1453,6 +1471,126 @@
           </div>
         );
       }
+      function ReportShare({ api, reportId }) {
+        const [open, setOpen] = useState(false);
+        const [d, setD] = useState(null);
+        const [err, setErr] = useState("");
+        const [msg, setMsg] = useState("");
+        const [email, setEmail] = useState("");
+        const [busy, setBusy] = useState(false);
+        const load = async () => { try { setD(await api({ action: "report_access_get" })); setErr(""); } catch (e) { setErr(e.message || "Could not load."); } };
+        useEffect(() => { if (open && !d) load(); }, [open]);
+        const setFor = async (who, list) => {
+          setBusy(true); setErr(""); setMsg("");
+          try { const r = await api({ action: "report_access_set", email: who, reports: list }); setMsg(r && r.mail && r.mail.sent ? "Saved. " + who + " has been told by e-mail." : "Saved."); await load(); }
+          catch (e) { setErr(e.message || "Could not save."); } finally { setBusy(false); }
+        };
+        const bt = "border border-[#2c385d] hover:border-[#8ef4b2] text-white text-xs px-3 py-1.5 rounded-lg disabled:opacity-50";
+        const people = d ? d.viewers : [];
+        return (
+          <div data-testid="report-share" className="space-y-2">
+            <button data-testid="share-toggle" onClick={() => setOpen(!open)} className={bt}>{open ? "Hide sharing" : "Share with report viewers"}</button>
+            {open && (
+              <div className="bg-white/5 border border-[#2c385d] rounded-xl p-3 space-y-2 text-xs text-[#b8c2d6]">
+                <div>Report viewers see only the reports you tick. Each change is e-mailed to them.</div>
+                {err && <div data-testid="share-error" className="text-red-300">{err}</div>}
+                {msg && <div data-testid="share-msg" className="text-[#8ef4b2]">{msg}</div>}
+                {d && people.length === 0 && <div className="text-[#78869b]">No report viewers yet. An administrator invites them in Admin, or type an e-mail below.</div>}
+                {d && people.map((p) => {
+                  const have = (d.access[p] || []);
+                  const on = have.includes(reportId);
+                  return (
+                    <label key={p} data-testid="share-row" className="flex items-center gap-2 text-white"><input data-testid="share-box" type="checkbox" disabled={busy} checked={on} onChange={(e) => setFor(p, e.target.checked ? [...have, reportId] : have.filter((x) => x !== reportId))} /> {p}<span className="text-[#78869b]">{have.length} report(s) in total</span></label>
+                  );
+                })}
+                <div className="flex gap-2 items-center">
+                  <input data-testid="share-email" aria-label="Report viewer e-mail" placeholder="name@company.com" value={email} onChange={(e) => setEmail(e.target.value)} className="bg-[#2D2D2D] border border-[#3D3D3D] rounded-md py-1.5 px-2 text-xs text-white w-56" />
+                  <button data-testid="share-add" disabled={busy || !email.includes("@")} onClick={async () => { const who = email.trim().toLowerCase(); await setFor(who, [...((d && d.access[who]) || []), reportId]); setEmail(""); }} className={bt}>Give access</button>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      }
+      function DatasetAdvanced({ api, dataset }) {
+        const [open, setOpen] = useState(false);
+        const [k, setK] = useState(null);
+        const [mode, setMode] = useState("replace");
+        const [key, setKey] = useState("");
+        const [name, setName] = useState("");
+        const [plan, setPlan] = useState(null);
+        const [msg, setMsg] = useState("");
+        const [err, setErr] = useState("");
+        const [busy, setBusy] = useState(false);
+        const bt = "border border-[#3D3D3D] hover:border-amber-500 text-white text-xs px-3 py-1 rounded-md disabled:opacity-50";
+        const inp = "bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-xs text-white";
+        useEffect(() => {
+          if (!open || k) return;
+          api({ action: "dataset_key_get", dataset }).then((r) => { setK(r); setMode(r.mode || "replace"); setKey(r.key || r.suggested || ""); }).catch((e) => setErr(e.message || "Could not load."));
+        }, [open]);
+        const saveKey = async () => {
+          setBusy(true); setErr(""); setMsg("");
+          try { const r = await api({ action: "dataset_key_set", dataset, mode, key: mode === "merge" ? key : undefined }); setMsg(r.mode === "merge" ? "Saved. A new file now updates matching rows by '" + r.key + "', adds new ones and keeps the rest." : "Saved. A new file now replaces the data."); }
+          catch (e) { setErr(e.message || "Could not save."); } finally { setBusy(false); }
+        };
+        const check = async () => {
+          setBusy(true); setErr(""); setMsg(""); setPlan(null);
+          try { setPlan(await api({ action: "dataset_rename_id", dataset, new_name: name })); } catch (e) { setErr(e.message || "Could not check."); } finally { setBusy(false); }
+        };
+        const apply = async () => {
+          setBusy(true); setErr("");
+          try {
+            const r = await api({ action: "dataset_rename_id", dataset, new_name: name, apply: true });
+            setMsg("Renamed to " + friendlyDs(r.new) + ". " + (r.reports_moved || 0) + " report(s), " + (r.personal_views_rebuilt || 0) + " personal view(s) moved. Uploading the original file again will update it.");
+            setPlan(null); window.dispatchEvent(new CustomEvent("samm-titles-changed")); window.dispatchEvent(new CustomEvent("samm-datasets-changed"));
+          } catch (e) { setErr(e.message || "Could not rename."); } finally { setBusy(false); }
+        };
+        const PL = { views: "Gold view(s)", personal_views: "personal view(s)", reports: "report(s)", links: "link(s)", drill_downs: "drill-down(s)", access_grants: "analyst access grant(s)" };
+        return (
+          <div data-testid="dataset-advanced" className="space-y-2">
+            <button data-testid="adv-toggle" onClick={() => setOpen(!open)} className="underline text-xs font-mono text-amber-400 hover:text-amber-300">{open ? "Hide name and update settings" : "Name and update settings"}</button>
+            {open && (
+              <div className="border border-[#2D2D2D] rounded-lg p-3 bg-[#1B1B1B] space-y-3 text-xs text-[#C0C0C0]">
+                <div className="space-y-2">
+                  <div className="font-semibold text-white">Rename everywhere</div>
+                  <div>Changes the dataset's name and everything attached to it: data, Gold views, mapping, rules, reports, links and drill-downs, analyst access. Uploading the original file again updates the renamed dataset.</div>
+                  <div className="flex flex-wrap gap-2 items-center">
+                    <input data-testid="adv-name" aria-label="New dataset name" value={name} maxLength={60} onChange={(e) => { setName(e.target.value); setPlan(null); }} placeholder="e.g. dim_po (the client prefix is added for you)" className={inp + " w-72"} />
+                    <button data-testid="adv-check" disabled={busy || !name.trim()} onClick={check} className={bt}>Check what will change</button>
+                  </div>
+                  {plan && (
+                    <div data-testid="adv-plan" className="bg-[#151515] border border-[#2D2D2D] rounded p-2 space-y-1">
+                      <div className="text-white">New name: <b>{plan.new}</b></div>
+                      <div>{Object.keys(PL).filter((x) => plan.plan && plan.plan[x]).map((x) => plan.plan[x] + " " + PL[x]).join(", ") || "Nothing else is attached yet."}</div>
+                      <button data-testid="adv-apply" disabled={busy} onClick={apply} className="bg-amber-600 hover:bg-amber-500 text-white font-bold px-3 py-1 rounded-md disabled:opacity-50">{busy ? "Renaming..." : "Rename now"}</button>
+                    </div>
+                  )}
+                </div>
+                <div className="space-y-2 border-t border-[#2D2D2D] pt-2">
+                  <div className="font-semibold text-white">When a new file arrives</div>
+                  {k && (
+                    <>
+                      <label className="flex items-center gap-2"><input type="radio" checked={mode === "replace"} onChange={() => setMode("replace")} /> Replace all rows (the default)</label>
+                      <label className="flex items-center gap-2"><input data-testid="adv-merge" type="radio" checked={mode === "merge"} onChange={() => setMode("merge")} /> Merge by key: matching rows are updated, new keys are added, older rows stay</label>
+                      {mode === "merge" && (
+                        <div className="pl-5 flex flex-wrap items-center gap-2">Key column
+                          <select data-testid="adv-key" aria-label="Key column" value={key} onChange={(e) => setKey(e.target.value)} className={inp}>
+                            <option value="">choose</option>{(k.columns || []).map((c) => <option key={c} value={c}>{c}{c === k.suggested ? " (SAMM suggests)" : ""}</option>)}
+                          </select>
+                          {!k.suggested && <span className="text-amber-300">SAMM found no column that is unique on every row, so check this one carefully.</span>}
+                        </div>
+                      )}
+                      <button data-testid="adv-save-key" disabled={busy || (mode === "merge" && !key)} onClick={saveKey} className={bt}>Save</button>
+                    </>
+                  )}
+                </div>
+                {err && <div data-testid="adv-error" className="text-red-300">{err}</div>}
+                {msg && <div data-testid="adv-msg" className="text-green-300">{msg}</div>}
+              </div>
+            )}
+          </div>
+        );
+      }
       function DatasetTools({ api, dataset, view, client, onAsk }) {
         const [show, setShow] = useState(false);
         const [ren, setRen] = useState({ open: false, title: "", subject: "", busy: false, err: null });
@@ -1496,6 +1634,7 @@
                 <ErrBox err={ren.err} />
               </div>
             )}
+            {["engineer", "admin", "system_admin"].includes(window.__sammRole) && <DatasetAdvanced api={api} dataset={dataset} />}
             {show && <DataViewer api={api} dataset={dataset} view={view} />}
             <ErrBox err={pub.err} />
             {pub.doc && (
@@ -2099,7 +2238,7 @@
               <div className="flex flex-wrap gap-2 items-center">
                 <select data-testid="myviews-dataset" aria-label="Dataset" value={f.dataset} onChange={(e) => setF({ ...blank, dataset: e.target.value })} className={inp}>
                   <option value="">Choose a dataset</option>
-                  {ds.map((d) => <option key={d.dataset} value={d.dataset}>{d.title || d.dataset}</option>)}
+                  {ds.map((d) => <option key={d.dataset} value={d.dataset}>{friendlyDs(d.dataset, d.title)} (Gold)</option>)}
                 </select>
                 <input data-testid="myviews-name" aria-label="View name" placeholder="View name, e.g. monthly_spend" maxLength={40} value={f.label} onChange={(e) => setF({ ...f, label: e.target.value })} className={inp + " w-64"} />
               </div>
@@ -2157,7 +2296,7 @@
                   const q = queue[d.dataset];
                   return (
                     <div key={d.dataset} data-testid="queue-ds" className="text-xs border-t border-[#2c385d] pt-2 space-y-1">
-                      <div className="flex items-center gap-3"><span className="font-bold text-white">{d.title || d.dataset}</span><button data-testid="queue-open" disabled={q && q.busy} onClick={() => openQueue(d.dataset)} className={bt}>{q && q.busy ? "Checking…" : "Check flagged rows"}</button></div>
+                      <div className="flex items-center gap-3"><span className="font-bold text-white">{friendlyDs(d.dataset, d.title)}</span><span className="text-[10px] px-1.5 py-0.5 rounded bg-[#2c385d] text-[#8ef4b2]">Gold</span><button data-testid="queue-open" disabled={q && q.busy} onClick={() => openQueue(d.dataset)} className={bt}>{q && q.busy ? "Checking…" : "Check flagged rows"}</button></div>
                       {q && !q.busy && (
                         <div data-testid="queue-result" className="space-y-1">
                           <div className="text-[#b8c2d6]">{q.flagged} of {q.total} rows flagged · {q.clean} clean · {q.held ? "flagged rows are HELD out of Gold" : "flagged rows are included in Gold"}</div>
@@ -2189,7 +2328,7 @@
                       <div className="font-bold text-white mb-1">{a}</div>
                       <div className="flex flex-wrap gap-3">
                         {grants.datasets.map((d) => (
-                          <label key={d.dataset} className="flex items-center gap-1 text-[#b8c2d6]"><input data-testid="grant-box" type="checkbox" checked={have.includes(d.dataset)} onChange={(e) => setGrant(a, e.target.checked ? [...have, d.dataset] : have.filter((x) => x !== d.dataset))} />{d.title || d.dataset}</label>
+                          <label key={d.dataset} className="flex items-center gap-1 text-[#b8c2d6]"><input data-testid="grant-box" type="checkbox" checked={have.includes(d.dataset)} onChange={(e) => setGrant(a, e.target.checked ? [...have, d.dataset] : have.filter((x) => x !== d.dataset))} />{friendlyDs(d.dataset, d.title)} <span className="text-[10px] text-[#8ef4b2]">Gold</span></label>
                         ))}
                       </div>
                     </div>
@@ -2260,11 +2399,12 @@
           setItems((p) => p.map((i) => (i.id === id ? { ...i, datasets: { ...i.datasets, [ds]: { open: true } } } : i)));
         };
 
-        const runFile = async (id, file, client) => {
+        const runFile = async (id, file, client, dsName) => {
           const api = apiFor(client);
           try {
             upd(id, { stage: "upload", msg: "Requesting a secure upload link..." });
-            const init = await api({ action: "upload_init", filename: file.name, size: file.size });
+            const init = await api({ action: "upload_init", filename: file.name, size: file.size, ...(dsName ? { dataset_name: dsName } : {}) });
+            upd(id, { dsName: init.dataset, fileAs: init.file, willUpdate: !!init.existing, aliasUsed: !!init.alias_used });
             upd(id, { msg: "Uploading to Bronze..." });
             await putFile(init.upload_url, file, (pct) => upd(id, { uploadPct: pct, msg: "Uploading to Bronze... " + pct + "%" }));
             upd(id, { stage: "bronze", msg: "Stored in Bronze. SAMM takes it from here..." });
@@ -2303,12 +2443,22 @@
           }
         };
 
+        const [staged, setStaged] = useState([]);
+        const slugName = (x) => String(x || "").toLowerCase().replace(/\.[a-z0-9]{1,5}$/, "").replace(/\s*\(\d+\)\s*$/, "").replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+        const prefixFor = (c) => (String(c || "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 30) || "client") + "_";
         const addFiles = (fileList) => {
-          Array.from(fileList || []).forEach((file) => {
+          const c = nowClient();
+          const added = Array.from(fileList || []).map((file) => ({ sid: "s" + ++seq.current, file, name: "", client: c }));   // read the list now: the input is cleared right after
+          setStaged((p) => [...p, ...added]);
+        };
+        const startStaged = () => {
+          staged.forEach((sf) => {
             const id = "f" + ++seq.current;
-            setItems((p) => [{ id, client: nowClient(), name: file.name, size: file.size, stage: "upload", msg: "Queued", datasets: {}, order: [], error: null, done: false }, ...p]);
-            runFile(id, file, nowClient());
+            const c = sf.client;
+            setItems((p) => [{ id, client: c, name: sf.file.name, size: sf.file.size, stage: "upload", msg: "Queued", datasets: {}, order: [], error: null, done: false }, ...p]);
+            runFile(id, sf.file, c, sf.name.trim());
           });
+          setStaged([]);
         };
 
         const runPipeline = async () => {
@@ -2377,6 +2527,29 @@
                 <div className="text-[11px] text-[#808080] mt-1">Up to 25 MB for csv/json/txt, 50 MB for Excel, 100 MB for archives</div>
                 <input id="onb-file" data-testid="onb-file" type="file" multiple accept={ACCEPT} className="hidden" onChange={(e) => { addFiles(e.target.files); e.target.value = ""; }} />
               </label>
+              {staged.length > 0 && (
+                <div data-testid="staged" className="border border-[#3D3D3D] rounded-xl p-4 space-y-3 bg-[#1E1E1E]">
+                  <div className="text-sm font-semibold text-white">Name your data before it goes in</div>
+                  <div className="text-[11px] text-[#A0A0A0]">The name decides the tables you will see everywhere, for example <span className="font-mono">{prefixFor(nowClient())}dim_po</span>. The client prefix is added automatically and cannot be changed here. If the name already exists, the file updates that dataset.</div>
+                  {staged.map((sf) => (
+                    <div key={sf.sid} data-testid="staged-row" className="flex flex-wrap items-center gap-2 text-xs">
+                      <span className="text-[#C0C0C0] w-48 truncate" title={sf.file.name}>{sf.file.name}</span>
+                      <span className="text-[#808080]">Uploading to <b data-testid="staged-client" className="text-white">{(clientNames || {})[sf.client] || sf.client || "your client"}</b></span>
+                      {(clients || []).length > 1 && (
+                        <select aria-label="Client for this file" value={sf.client || ""} onChange={(e) => setStaged((p) => p.map((x) => x.sid === sf.sid ? { ...x, client: e.target.value } : x))} className="bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-white">
+                          {clients.map((c) => <option key={c} value={c}>{(clientNames || {})[c] || c}</option>)}
+                        </select>
+                      )}
+                      <span className="flex items-center">
+                        <span data-testid="staged-prefix" className="bg-[#151515] border border-[#3D3D3D] border-r-0 rounded-l px-2 py-1 font-mono text-[#808080]">{prefixFor(sf.client)}</span>
+                        <input data-testid="staged-name" aria-label="Name this dataset" value={sf.name} onChange={(e) => setStaged((p) => p.map((x) => x.sid === sf.sid ? { ...x, name: e.target.value } : x))} placeholder={slugName(sf.file.name) || "dataset_name"} className="bg-[#2D2D2D] border border-[#3D3D3D] rounded-r px-2 py-1 font-mono text-white w-56" />
+                      </span>
+                      <button onClick={() => setStaged((p) => p.filter((x) => x.sid !== sf.sid))} className="text-[#808080] hover:text-white underline">Remove</button>
+                    </div>
+                  ))}
+                  <button data-testid="staged-go" onClick={startStaged} className="bg-amber-600 hover:bg-amber-500 text-white font-bold text-sm px-4 py-2 rounded-lg">Upload {staged.length} file{staged.length === 1 ? "" : "s"}</button>
+                </div>
+              )}
               <details className="text-xs"><summary data-testid="more-options" className="cursor-pointer text-[#A0A0A0] hover:text-white">More options</summary><div className="flex flex-wrap items-center gap-3 mt-2">
                 <button onClick={runPipeline} disabled={pipe.busy} className="border border-[#3D3D3D] hover:border-amber-500 text-xs text-white px-3 py-2 rounded-lg disabled:opacity-50">▶ Process files already uploaded</button>
                 <button onClick={() => checkNew(false)} disabled={pipe.busy} className="border border-[#3D3D3D] hover:border-amber-500 text-xs text-white px-3 py-2 rounded-lg disabled:opacity-50">🔎 Check for new datasets</button>
@@ -2407,7 +2580,8 @@
               return (
                 <div key={it.id} className="bg-[#222222] border border-[#2D2D2D] rounded-xl p-5 shadow space-y-3" data-testid="onb-item">
                   <div className="flex justify-between items-center gap-3">
-                    <div className="text-sm text-white font-mono truncate">{it.name}</div>
+                    <div className="min-w-0"><div className="text-sm text-white font-mono truncate">{it.name}</div>
+                      {it.dsName && <div data-testid="item-dsname" className="text-[11px] text-[#A0A0A0] truncate">Dataset: <b className="text-white">{String(it.dsName).replace(/^silver_/, "")}</b>{it.willUpdate ? (it.aliasUsed ? " · updates the renamed dataset" : " · updates the existing dataset") : " · new dataset"}</div>}</div>
                     <div className="flex items-center gap-3 shrink-0">
                       {it.client && <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-[#333] text-[#BBB]" data-testid="item-client">client: {it.client}</span>}
                       {it.size > 0 && <div className="text-[11px] text-[#808080]">{(it.size / 1024).toFixed(0)} KB</div>}
@@ -2544,6 +2718,25 @@
         const [issued, setIssued] = useState(null);
         const [copied, setCopied] = useState(false);
         const [form, setForm] = useState({ email: "", role: "viewer", tenant_id: "", expires_days: "" });
+        const [inv, setInv] = useState({ email: "", role: "viewer", reports: [], busy: false, msg: "", err: "" });
+        const [invites, setInvites] = useState([]);
+        const [repList, setRepList] = useState([]);
+        const loadInvites = async () => { try { const r = await api({ action: "invite_list" }); setInvites(r.invites || []); } catch (_) { /* older back end */ } };
+        const loadRepList = async () => { try { const r = await api({ action: "report_access_get" }); setRepList(r.reports || []); } catch (_) { /* optional */ } };
+        const sendInvite = async (e) => {
+          e.preventDefault();
+          setInv((x) => ({ ...x, busy: true, msg: "", err: "" }));
+          try {
+            const r = await api({ action: "invite_send", email: inv.email, role: inv.role, ...(inv.role === "report_viewer" ? { reports: inv.reports } : {}), ...(isSys && form.tenant_id ? { tenant_id: form.tenant_id } : {}) });
+            setInv((x) => ({ ...x, busy: false, email: "", reports: [], msg: r.sent ? "Invitation sent to " + r.invite.email + ". The link works once for 72 hours." : "", err: r.sent ? "" : (r.error || "The invitation was created but the e-mail could not be sent.") }));
+            await loadInvites(); await loadUsers();
+          } catch (ex) { setInv((x) => ({ ...x, busy: false, err: (ex && ex.message) || "Could not send." })); await loadInvites(); }   // a refused e-mail still leaves a "failed" entry in the log
+        };
+        const resendInvite = async (id) => {
+          setInv((x) => ({ ...x, busy: true, msg: "", err: "" }));
+          try { const r = await api({ action: "invite_resend", id, ...(isSys && form.tenant_id ? { tenant_id: form.tenant_id } : {}) }); setInv((x) => ({ ...x, busy: false, msg: r.sent ? "A new invitation was sent. The old link no longer works." : "", err: r.sent ? "" : (r.error || "Could not send.") })); await loadInvites(); }
+          catch (ex) { setInv((x) => ({ ...x, busy: false, err: (ex && ex.message) || "Could not resend." })); await loadInvites(); }
+        };
         const [tenants, setTenants] = useState([]);
         const [policyTenant, setPolicyTenant] = useState(identity.tenant_id);
         const [pol, setPol] = useState(null);
@@ -2562,6 +2755,7 @@
             setPolMsg("");
           } catch (e) { fail(e); }
         };
+        useEffect(() => { loadInvites(); loadRepList(); }, []);
         useEffect(() => { loadUsers(); if (isSys) api({ action: "tenants" }).then((r) => setTenants(r.tenants || [])).catch(() => {}); }, []);
         useEffect(() => { loadPolicy(policyTenant); }, [policyTenant]);
 
@@ -2622,8 +2816,51 @@
               )}
             </div>
 
+            <div data-testid="invite-panel" className="bg-[#222222] border border-[#2D2D2D] rounded-xl p-6 shadow-xl space-y-3">
+              <h3 className="text-sm font-bold text-white">Invite a user by e-mail</h3>
+              <p className="text-[11px] text-[#A0A0A0]">They get a one-time link that opens SAMM with exactly the access you choose. It works once, for 72 hours, and only for that e-mail address. You never see or send a token. Later changes to their access are e-mailed to them too.</p>
+              <form onSubmit={sendInvite} className="flex flex-wrap gap-2 items-end">
+                <label className="text-[10px] text-[#A0A0A0] flex flex-col gap-1">E-mail
+                  <input data-testid="invite-email" aria-label="Invite e-mail" required type="email" value={inv.email} onChange={(e) => setInv({ ...inv, email: e.target.value })} className={inp + " w-60"} placeholder="name@company.com" />
+                </label>
+                <label className="text-[10px] text-[#A0A0A0] flex flex-col gap-1">Access
+                  <select data-testid="invite-role" aria-label="Invite role" value={inv.role} onChange={(e) => setInv({ ...inv, role: e.target.value })} className={inp}>
+                    {roles.map((r) => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
+                  </select>
+                </label>
+                <button data-testid="invite-send" type="submit" disabled={inv.busy} className={btn}>{inv.busy ? "Sending..." : "Send invitation"}</button>
+              </form>
+              <p className="text-[10px] text-[#707070]">{ROLE_HELP[inv.role]}</p>
+              {inv.role === "report_viewer" && (
+                <div data-testid="invite-reports" className="text-xs space-y-1">
+                  <div className="text-[#A0A0A0]">Reports this person may open (a Data Engineer can change this later):</div>
+                  {repList.length === 0 && <div className="text-[#707070]">No reports are published yet. You can still invite now and share reports afterwards.</div>}
+                  <div className="flex flex-wrap gap-3">
+                    {repList.map((r) => (
+                      <label key={r.id} className="flex items-center gap-1 text-[#C0C0C0]"><input data-testid="invite-report-box" type="checkbox" checked={inv.reports.includes(r.id)} onChange={(e) => setInv({ ...inv, reports: e.target.checked ? [...inv.reports, r.id] : inv.reports.filter((x) => x !== r.id) })} />{r.title || r.id}</label>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {inv.msg && <div data-testid="invite-msg" className="text-xs text-green-300">{inv.msg}</div>}
+              {inv.err && <div data-testid="invite-err" className="text-xs text-red-300 bg-red-900/20 border border-red-800 rounded-md p-2">{inv.err}</div>}
+              {invites.length > 0 && (
+                <div data-testid="invite-log" className="pt-2 border-t border-[#2D2D2D] space-y-1">
+                  <div className="text-[10px] text-[#707070]">Invitation activity</div>
+                  {invites.slice().sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))).slice(0, 30).map((i) => (
+                    <div key={i.id} data-testid="invite-row" className="flex flex-wrap gap-2 items-center text-xs font-mono">
+                      <span className="text-white">{i.email}</span>
+                      <span className="text-[#707070]">{ROLE_LABELS[i.role] || i.role}{i.reports ? " · " + i.reports + " report(s)" : ""} · {String(i.created_at || "").slice(0, 16).replace("T", " ")}</span>
+                      <span data-testid="invite-status" className={i.status === "activated" ? "text-green-300" : i.status === "sent" ? "text-amber-300" : "text-[#A0A0A0]"}>{({ sent: "Sent", activated: "Activated", expired: "Expired", failed: "E-mail failed", superseded: "Replaced by a newer one", pending: "Sending" })[i.status] || i.status}</span>
+                      {["sent", "expired", "failed", "activated"].includes(i.status) && <button data-testid="invite-resend" disabled={inv.busy} onClick={() => resendInvite(i.id)} className={link}>{i.status === "activated" ? "Send a new link" : "Resend"}</button>}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
             <div className="bg-[#222222] border border-[#2D2D2D] rounded-xl p-6 shadow-xl space-y-3">
-              <h3 className="text-sm font-bold text-white">Add a user</h3>
+              <h3 className="text-sm font-bold text-white">Add a user with a token (manual)</h3>
               <form onSubmit={addUser} className="flex flex-wrap gap-2 items-end">
                 <label className="text-[10px] text-[#A0A0A0] flex flex-col gap-1">E-mail
                   <input aria-label="User e-mail" required value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} className={inp + " w-56"} placeholder="name@company.com" />
@@ -2690,7 +2927,7 @@
                     <input aria-label="Restricted columns" value={pol.restricted} onChange={(e) => setPol({ ...pol, restricted: e.target.value })} className={inp} placeholder="salary, id_number" />
                     {pol.meta.platform_restricted.length > 0 && <span className="text-[10px] text-[#707070]">Always hidden platform-wide: {pol.meta.platform_restricted.join(", ")}</span>}
                   </label>
-                  <div className="grid grid-cols-5 gap-2">
+                  <div className="grid grid-cols-3 md:grid-cols-6 gap-2">
                     {ROLES_ORDER.map((r) => (
                       <label key={r} className="flex flex-col gap-1 text-[10px] text-[#A0A0A0]">{ROLE_LABELS[r]} rows
                         <input aria-label={"Row cap " + r} type="number" min="1" max={pol.meta.hard_max_rows} value={pol.caps[r] == null ? "" : pol.caps[r]} onChange={(e) => setPol({ ...pol, caps: { ...pol.caps, [r]: e.target.value } })} className={inp} placeholder={String(pol.meta.default_row_caps[r])} />
@@ -2730,7 +2967,7 @@
           </div>
         );
       }
-      const ROLES_ORDER = ["viewer", "analyst", "engineer", "admin", "system_admin"];
+      const ROLES_ORDER = ["report_viewer", "viewer", "analyst", "engineer", "admin", "system_admin"];
 
       // ------------------------------------------------------------------
       // Main app
@@ -2758,7 +2995,7 @@
 
         const [input, setInput] = useState("");
         const [persona, setPersona] = useState("architect");
-        const [activeTab, setActiveTab] = useState("chat");
+        const [activeTab, setActiveTab] = useState(role === "report_viewer" ? "dashboard" : "chat");
         const [isLoading, setIsLoading] = useState(false);
 
         const [s3Path, setS3Path] = useState("s3://shiftleft-superposition-ingest-vault/CS.json");
@@ -2824,6 +3061,9 @@
           if (messagesEndRef.current && messagesEndRef.current.scrollIntoView) messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
         }, [messages, isLoading]);
 
+        const isRV = role === "report_viewer";
+        useEffect(() => { window.__sammRole = role; }, [role]);
+        useEffect(() => { if (isRV && activeTab !== "dashboard") setActiveTab("dashboard"); }, [isRV, activeTab]);
         const canOnboard = CAN_ONBOARD.includes(role);
         const canGovern = CAN_GOVERN.includes(role);
         const canGold = CAN_GOLD.includes(role);
@@ -3023,31 +3263,31 @@
                   </div>
                 )}
                 <nav className="p-4 space-y-2">
-                  <button onClick={() => setActiveTab("chat")} className={navClass("chat", false)}>
+                  {!isRV && <button onClick={() => setActiveTab("chat")} className={navClass("chat", false)}>
                     <span>💬 Ask SAMM</span>
-                  </button>
+                  </button>}
                   <button data-testid="nav-dashboard" onClick={() => setActiveTab("dashboard")} className={navClass("dashboard", false)}>
                     <span>📊 Reports{tiles.length ? " (" + tiles.length + ")" : ""}</span>
                   </button>
-                  <button data-testid="nav-myviews" onClick={() => canGold && setActiveTab("myviews")} disabled={!canGold} title={canGold ? "" : "Requires Analyst or above"} className={navClass("myviews", !canGold)}>
+                  {!isRV && <button data-testid="nav-myviews" onClick={() => canGold && setActiveTab("myviews")} disabled={!canGold} title={canGold ? "" : "Requires Analyst or above"} className={navClass("myviews", !canGold)}>
                     <span>🗂️ My views</span>
-                  </button>
-                  <button
+                  </button>}
+                  {!isRV && <button
                     onClick={() => canOnboard && setActiveTab("onboarding")}
                     disabled={!canOnboard}
                     title={canOnboard ? "" : "Requires Data Engineer or above"}
                     className={navClass("onboarding", !canOnboard)}
                   >
                     <span>📦 Onboarding</span>
-                  </button>
-                  <button
+                  </button>}
+                  {!isRV && <button
                     onClick={() => canGovern && setActiveTab("governance")}
                     disabled={!canGovern}
                     title={canGovern ? "" : "Requires a Client or System Administrator"}
                     className={navClass("governance", !canGovern)}
                   >
                     <span>🛡️ Admin</span>
-                  </button>
+                  </button>}
                 </nav>
               </div>
               <div className="p-4 border-t border-[#2D2D2D] bg-[#1E1E1E]">
@@ -3068,7 +3308,7 @@
                   <div className="text-xs font-mono space-y-1">
                     <div data-testid="who-role" className="text-white">{ROLE_LABELS[identity.role] || identity.role}</div>
                     <div className="text-[#A0A0A0] truncate" title={identity.email}>{identity.email}</div>
-                    <div data-testid="who-version" className="text-[#707070]">Server {identity.version || "older than v26 - redeploy the backend"} · Screen v26</div>
+                    <div data-testid="who-version" className="text-[#707070]">Server {identity.version || "older than v27 - redeploy the backend"} · Screen v27</div>
                     <button onClick={onSignOut} className="mt-2 text-[#A0A0A0] hover:text-white underline">Sign out</button>
                   </div>
                 )}
@@ -3226,7 +3466,7 @@
                 )}
 
                 {activeTab === "dashboard" && (
-                  <DashboardHub canManage={CAN_ONBOARD.includes(role)} client={acting || identity.tenant_id} api={(p) => callBackend(session.url, session.token, p)} openId={openReportId} onOpenHandled={() => setOpenReportId("")} onPublished={(tool, title, n) => callBackend(session.url, session.token, { action: "publish_report", tool, title, tiles: n }).catch(() => {})} tiles={tiles} onRemove={(id) => setTiles((p) => p.filter((x) => x.id !== id))} onRefresh={refreshTile}
+                  <DashboardHub viewerOnly={isRV} canManage={CAN_ONBOARD.includes(role)} client={acting || identity.tenant_id} api={(p) => callBackend(session.url, session.token, p)} openId={openReportId} onOpenHandled={() => setOpenReportId("")} onPublished={(tool, title, n) => callBackend(session.url, session.token, { action: "publish_report", tool, title, tiles: n }).catch(() => {})} tiles={tiles} onRemove={(id) => setTiles((p) => p.filter((x) => x.id !== id))} onRefresh={refreshTile}
                     onAsk={(q) => { setActiveTab("chat"); sendText(q); }} />
                 )}
 
@@ -3294,14 +3534,72 @@
         );
       }
 
+      function InviteLanding({ code, api, onDone, onSkip }) {
+        const [info, setInfo] = useState(null);
+        const [err, setErr] = useState(null);
+        const [busy, setBusy] = useState(false);
+        const [remember, setRemember] = useState(false);
+        useEffect(() => {
+          let on = true;
+          callPublic(api, { action: "invite_info", code }).then((r) => on && setInfo(r)).catch((e) => on && setErr(e));
+          return () => { on = false; };
+        }, []);
+        const go = async () => {
+          setBusy(true); setErr(null);
+          try {
+            const r = await callPublic(api, { action: "invite_activate", code });
+            const who = await callBackend(api, r.token, { action: "whoami" });
+            if (remember) rememberSet(api, r.token);
+            try { window.history.replaceState(null, "", window.location.pathname + window.location.search); } catch (_) { /* optional */ }
+            onDone({ url: api, token: r.token, identity: who });
+          } catch (e) { setErr(e); setBusy(false); }
+        };
+        return (
+          <div className="min-h-screen flex items-center justify-center bg-[#191919] p-4">
+            <div data-testid="invite-landing" className="w-full max-w-md bg-[#222222] border border-[#2D2D2D] rounded-xl p-6 shadow-xl space-y-4">
+              <div className="flex items-center space-x-3 border-b border-[#2D2D2D] pb-4">
+                <div className="bg-amber-600 px-3 py-1 rounded-lg text-white font-bold text-sm">SAMM</div>
+                <div><h1 className="font-bold text-base text-white tracking-wide">You have been invited</h1><p className="text-[10px] text-amber-500 font-mono">One-time link</p></div>
+              </div>
+              {!info && !err && <div className="text-xs text-[#A0A0A0]">Checking your invitation...</div>}
+              {info && (
+                <div className="space-y-3 text-sm text-[#E3E3E3]">
+                  <p data-testid="invite-text">You can use SAMM for <b className="text-white">{info.client_name || info.client}</b> as <b className="text-white">{ROLE_LABELS[info.role] || info.role}</b>: {info.role_words}.</p>
+                  <p className="text-xs text-[#A0A0A0]">This invitation is for {info.email} and works once. It stops working on {String(info.expires_at || "").slice(0, 16).replace("T", " ")} UTC.</p>
+                  <label className="flex items-center gap-2 text-xs text-[#C0C0C0]"><input data-testid="invite-remember" type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} /> Keep me signed in on this device (do not tick on a shared computer)</label>
+                  <button data-testid="invite-activate" onClick={go} disabled={busy} className="w-full bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-bold text-sm py-2.5 rounded-lg">{busy ? "Activating..." : "Activate my access"}</button>
+                </div>
+              )}
+              {err && <div data-testid="invite-error" className="text-xs text-red-300 bg-red-900/20 border border-red-800 rounded-md p-3">{err.message}</div>}
+              <button onClick={onSkip} className="w-full text-xs text-[#A0A0A0] hover:text-white underline">I already have an access token</button>
+            </div>
+          </div>
+        );
+      }
+      function parseInvite() {
+        const m = /#invite=([A-Za-z0-9_\-]{1,64}\.[A-Za-z0-9_\-]{10,200})&api=([^&]+)/.exec(window.location.hash || "");
+        if (!m) return null;
+        let api = "";
+        try { api = decodeURIComponent(m[2]); } catch (_) { return null; }
+        return /^https:\/\/[A-Za-z0-9.\-]+\.on\.aws\/?$|^https:\/\/[A-Za-z0-9.\-]+\/?$/.test(api) ? { code: m[1], api } : null;
+      }
       function App() {
         const [session, setSession] = useState(null);
         const [demo, setDemo] = useState(FORCE_DEMO);
+        const [invite, setInvite] = useState(() => parseInvite());
+        const [checking, setChecking] = useState(() => !parseInvite() && !!rememberGet());
+        useEffect(() => {
+          const d = rememberGet();
+          if (!checking || !d) return;
+          callBackend(d.url, d.token, { action: "whoami" }).then((who) => setSession({ url: d.url, token: d.token, identity: who })).catch(() => rememberClear()).finally(() => setChecking(false));
+        }, []);
         if (demo) return <SammConsole demo={true} onSignOut={() => setDemo(false)} />;
+        if (checking) return <div className="min-h-screen flex items-center justify-center bg-[#191919] text-xs text-[#A0A0A0]">Signing you in...</div>;
+        if (invite && !session) return <InviteLanding code={invite.code} api={invite.api} onDone={(s) => { setInvite(null); setSession(s); }} onSkip={() => setInvite(null)} />;
         if (!session) {
           return <SignIn defaultUrl={API_URL} onSignedIn={setSession} onDemo={() => setDemo(true)} />;
         }
-        return <SammConsole session={session} demo={false} onSignOut={() => setSession(null)} />;
+        return <SammConsole session={session} demo={false} onSignOut={() => { rememberClear(); setSession(null); }} />;
       }
 
       ReactDOM.createRoot(document.getElementById("root")).render(<App />);
