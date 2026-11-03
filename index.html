@@ -2052,6 +2052,18 @@
         const [chain, setChain] = useState(null);       // { levels: [dataset], labels: [..] }
         const [hname, setHname] = useState("");
         const [drill, setDrill] = useState("");
+        const [model, setModel] = useState(null);      // suggestions: combine same-shape files, build shared lists
+        const [mnote, setMnote] = useState("");
+        const loadModel = async () => { try { const r = await api({ action: "model_suggest" }); setModel(r && Array.isArray(r.combine) && Array.isArray(r.dimensions) ? r : null); } catch (e) { setModel(null); } };
+        const modelDo = async (kind, item) => {
+          setBusy("m" + item.id); setErr(null); setMnote("");
+          try {
+            if (kind === "combine") { const r = await api({ action: "combine_apply", datasets: item.datasets, extend: item.extend || undefined, key: item.key || undefined }); setMnote("Combined " + item.datasets.length + " files into one table of " + r.stats.rows + " rows" + (r.stats.replaced ? " (" + r.stats.replaced + " older rows replaced by newer ones)." : ".")); }
+            else if (kind === "dimension") { const r = await api({ action: "dimension_apply", id: item.id }); setMnote("Built the shared list of " + item.column.replace(/_/g, " ") + " (" + r.values + " values) and linked " + r.linked + " tables to it" + (r.need_review ? "; " + r.need_review + " link(s) need your review below." : ".")); }
+            else { await api({ action: "model_dismiss", kind: kind.replace("dismiss-", ""), id: item.id }); }
+            await loadModel(); await load();
+          } catch (e) { setErr(e); } finally { setBusy(""); }
+        };
         const label = (ds) => ((data && data.labels && data.labels[ds]) || String(ds).replace(/^silver_/, ""));
         const load = async () => {
           setBusy("load"); setErr(null);
@@ -2059,6 +2071,7 @@
             const r = await api({ action: "links_suggest" });
             const labels = {}; r.candidates.forEach((c) => { labels[c.a.dataset] = c.a_label; labels[c.b.dataset] = c.b_label; });
             setData({ ...r, labels });
+            loadModel();
           } catch (e) { setErr(e); } finally { setBusy(""); }
         };
         const merge = (link) => setData((d) => d ? { ...d, candidates: d.candidates.map((c) => c.id === link.id ? { ...c, status: link.status, stats: link.stats, orphan_sample: link.orphan_sample } : c), links: d.links.filter((l) => l.id !== link.id).concat([link]) } : d);
@@ -2118,6 +2131,32 @@
             {open && busy === "load" && <div className="text-xs text-[#A0A0A0]">Looking at the columns...</div>}
             {open && data && (
               <div className="space-y-3">
+                {model && mnote && <div data-testid="model-note" className="text-xs text-green-300">{mnote}</div>}
+                {model && (model.combine.length > 0 || model.dimensions.length > 0) && (
+                  <div data-testid="model-panel" className="space-y-2">
+                    <div className="text-xs font-bold text-white">What SAMM can build from your data{model.mode === "auto" ? " (automatic mode builds these for you)" : ""}</div>
+                    {model.combine.map((c) => (
+                      <div key={c.id} data-testid="combine-row" className="border border-[#2D2D2D] rounded-lg p-3 bg-[#1B1B1B] text-xs space-y-1">
+                        <div className="text-white font-semibold">{c.extend ? "Add to the combined table: " : "These files have the same columns: "}{c.labels.join(", ")}</div>
+                        <div className="text-[#A0A0A0]">{Math.round(c.ratio * 100)}% of columns match. Combined: {c.preview.rows} rows{c.key ? ", matched on " + c.key.replace(/_/g, " ") + (c.preview.replaced ? " (" + c.preview.replaced + " duplicates keep the newest)" : "") : ""}{c.preview.identical_rows ? ". " + c.preview.identical_rows + " rows are identical in more than one file" : ""}.{c.level !== "offer" ? " Check this one: the match is partial." : ""}</div>
+                        <div className="flex gap-2 pt-1">
+                          <button data-testid="combine-apply" disabled={busy === "m" + c.id} onClick={() => modelDo("combine", c)} className="border border-green-700 text-green-300 hover:bg-green-900/30 px-2 py-1 rounded disabled:opacity-50">Combine</button>
+                          <button data-testid="combine-dismiss" disabled={busy === "m" + c.id} onClick={() => modelDo("dismiss-combine", c)} className="border border-[#3D3D3D] text-[#A0A0A0] px-2 py-1 rounded disabled:opacity-50">Not now</button>
+                        </div>
+                      </div>
+                    ))}
+                    {model.dimensions.map((d) => (
+                      <div key={d.id} data-testid="dimension-row" className="border border-[#2D2D2D] rounded-lg p-3 bg-[#1B1B1B] text-xs space-y-1">
+                        <div className="text-white font-semibold">{d.extend ? "Add to the shared list of " : "Shared list of "}<span className="text-amber-300 font-mono">{d.column.replace(/_/g, " ")}</span> · {d.values} values</div>
+                        <div className="text-[#A0A0A0]">Used by: {d.members.map((m) => m.label).join(", ")}. One list lets these tables be filtered and compared together.</div>
+                        <div className="flex gap-2 pt-1">
+                          <button data-testid="dimension-apply" disabled={busy === "m" + d.id} onClick={() => modelDo("dimension", d)} className="border border-green-700 text-green-300 hover:bg-green-900/30 px-2 py-1 rounded disabled:opacity-50">Create shared list</button>
+                          <button data-testid="dimension-dismiss" disabled={busy === "m" + d.id} onClick={() => modelDo("dismiss-dimension", d)} className="border border-[#3D3D3D] text-[#A0A0A0] px-2 py-1 rounded disabled:opacity-50">Not now</button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 {data.candidates.length === 0 && <div data-testid="links-none" className="text-xs text-[#A0A0A0]">No likely links found. Link finding needs at least two tables with key-like columns such as a code or id.</div>}
                 {data.candidates.length > 0 && (
                   <div className="flex flex-wrap items-center gap-3 text-xs">
@@ -3336,7 +3375,7 @@
                   <div className="text-xs font-mono space-y-1">
                     <div data-testid="who-role" className="text-white">{ROLE_LABELS[identity.role] || identity.role}</div>
                     <div className="text-[#A0A0A0] truncate" title={identity.email}>{identity.email}</div>
-                    <div data-testid="who-version" className="text-[#707070]">Server {identity.version || "older than v28 - redeploy the backend"} · Screen v28</div>
+                    <div data-testid="who-version" className="text-[#707070]">Server {identity.version || "older than v29 - redeploy the backend"} · Screen v29</div>
                     <button onClick={onSignOut} className="mt-2 text-[#A0A0A0] hover:text-white underline">Sign out</button>
                   </div>
                 )}
