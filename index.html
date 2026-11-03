@@ -160,7 +160,7 @@
             "If the message names a role or column, your role is not allowed to do that.",
             "If it is a bare AWS 'Forbidden', the Function URL resource policy does not allow public invocation (auth NONE needs a lambda:InvokeFunctionUrl permission for principal *).",
           ],
-          409: ["The Gold view has no tenant column, so tenant isolation cannot be enforced. Add tenant_id to the Gold view, or set ALLOW_UNSCOPED=true for single-tenant testing only."],
+          409: /tenant isolation|tenant column/i.test(serverMsg || "") ? ["The Gold view has no tenant column, so tenant isolation cannot be enforced. Rebuild that view from the Silver tab, or set ALLOW_UNSCOPED=true for single-tenant testing only."] : [],
           413: ["FinOps circuit breaker: this question would scan more than the per-query data limit, so SAMM stopped it before it could cost money.", "Narrow it by date range, dataset or site, then ask again."],
           429: ["Too many requests or Bedrock throttling. Wait a moment and retry."],
           502: ["The model returned an empty or unusable answer. Retry; check Bedrock model access and MODEL_ID."],
@@ -603,7 +603,8 @@
         );
       }
 
-      function ReportView({ doc, api, client, onBack, onChanged, onAsk }) {
+      function ReportView({ doc, api, client, onBack, onChanged, onAsk, canManage }) {
+        const [delAsk, setDelAsk] = useState(false);
         const [cur, setCur] = useState(doc);
         const [busy, setBusy] = useState(false);
         const [msg, setMsg] = useState("");
@@ -651,6 +652,9 @@
               <button onClick={onBack} className={bt} data-testid="report-back">← All reports</button>
               {cur.kind === "dataset" && <button onClick={refresh} disabled={busy} className={bt} data-testid="report-refresh">{busy ? "Refreshing..." : "Refresh numbers"}</button>}
               <button onClick={() => { try { navigator.clipboard.writeText(link); setMsg("Link copied."); } catch (_) { setMsg(link); } }} className={bt} data-testid="report-copy">Copy link</button>
+              {canManage && (delAsk
+                ? <span className="flex items-center gap-2 text-xs"><span className="text-amber-200">Delete this report for everyone?</span><button data-testid="report-del-yes" onClick={async () => { try { await api({ action: "report_delete", id: cur.id }); if (onChanged) onChanged(); onBack(); } catch (e) { setMsg(e.message || "Could not delete."); } }} className="underline text-red-300">Yes, delete</button><button onClick={() => setDelAsk(false)} className="underline text-[#b8c2d6]">No</button></span>
+                : <button data-testid="report-del" onClick={() => setDelAsk(true)} className={bt}>Delete report</button>)}
               <button onClick={() => downloadBlob("samm-report-" + String(cur.title || "report").replace(/[^A-Za-z0-9]+/g, "_").slice(0, 30) + ".html", new Blob([reportHtml(cur.title, cur.client || client, cur.tiles || [], cur.accent)], { type: "text/html" }))} className={bt} data-testid="report-download">Download page</button>
               {hiers.length > 0 && (
                 <select aria-label="Drill down" data-testid="report-drill" value={drillName} onChange={(e) => setDrillName(e.target.value)} className="bg-[#1b2a55] border border-[#2c385d] text-white text-xs rounded-lg px-2 py-1.5">
@@ -679,7 +683,9 @@
         );
       }
 
-      function DashboardHub({ tiles, onRemove, onRefresh, onAsk, client, onPublished, api, openId, onOpenHandled }) {
+      function DashboardHub({ tiles, onRemove, onRefresh, onAsk, client, onPublished, api, openId, onOpenHandled, canManage }) {
+        const [confirmDel, setConfirmDel] = useState("");
+        const [dups, setDups] = useState(null);
         const [pubTitle, setPubTitle] = useState("");
         const [pubTool, setPubTool] = useState("samm");
         const [pubMsg, setPubMsg] = useState("");
@@ -711,7 +717,7 @@
           } catch (e) { setPubMsg("Could not create the package: " + (e && e.message ? e.message : e)); }
         };
         const [busy, setBusy] = useState("");
-        if (viewing) return <ReportView doc={viewing} api={api} client={client} onBack={() => { setViewing(null); loadReports(); }} onChanged={loadReports} onAsk={(ds) => onAsk && onAsk("Describe the dataset " + String(ds).replace(/^silver_/, ""))} />;
+        if (viewing) return <ReportView canManage={canManage} doc={viewing} api={api} client={client} onBack={() => { setViewing(null); loadReports(); }} onChanged={loadReports} onAsk={(ds) => onAsk && onAsk("Describe the dataset " + String(ds).replace(/^silver_/, ""))} />;
         return (
           <div data-testid="dashboard" className="max-w-5xl mx-auto space-y-4 rounded-3xl p-6 border border-[#2c385d]" style={{ background: "radial-gradient(900px 380px at 75% -10%, #1d3a6b 0%, transparent 60%), linear-gradient(180deg,#13214a,#0f1c3f)" }}>
             <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -750,12 +756,22 @@
             <div data-testid="published-reports" className="bg-white/5 border border-[#2c385d] rounded-2xl p-4 space-y-2">
               <div className="text-sm font-bold text-white">Published reports{client ? " · " + client : ""}</div>
               {repErr && <div className="text-[11px] text-amber-200">{repErr}</div>}
+              {canManage && reports.length > 1 && (
+                <div className="text-[11px] flex flex-wrap items-center gap-3">
+                  <button data-testid="report-dedupe" onClick={async () => { try { const r = await api({ action: "report_dedupe" }); setDups(r.duplicates); } catch (e) { setRepErr(e.message || "Could not check."); } }} className="underline text-[#8ef4b2]">Find duplicate reports</button>
+                  {dups && dups.length === 0 && <span data-testid="dedupe-none" className="text-[#78869b]">No duplicates.</span>}
+                  {dups && dups.length > 0 && <span className="flex items-center gap-2"><span data-testid="dedupe-found" className="text-amber-200">{dups.length} older cop{dups.length === 1 ? "y" : "ies"} of the same report.</span><button data-testid="dedupe-apply" onClick={async () => { try { await api({ action: "report_dedupe", apply: true }); setDups(null); loadReports(); } catch (e) { setRepErr(e.message || "Could not remove."); } }} className="underline text-red-300">Keep the newest, remove the rest</button></span>}
+                </div>
+              )}
               {reports.length === 0 && <div className="text-[11px] text-[#78869b]">Nothing published yet. Publish from a dataset (Onboarding) or pin charts below and choose "SAMM report link".</div>}
               {reports.map((r) => (
                 <div key={r.id} data-testid="report-row" className="flex flex-wrap items-center gap-3 text-xs">
                   <span className="text-white font-semibold">{r.title}</span>
                   <span className="text-[#78869b]">{r.tiles} tile(s) · {String(r.updated || r.created || "").slice(0, 10)} · {r.by}</span>
                   <button data-testid="report-open" onClick={() => openReport(r.id)} className="underline text-[#8ef4b2] hover:text-white">Open</button>
+                  {canManage && (confirmDel === r.id
+                    ? <span className="flex items-center gap-2"><span className="text-amber-200">Delete this report?</span><button data-testid="report-delete-yes" onClick={async () => { try { await api({ action: "report_delete", id: r.id }); setConfirmDel(""); loadReports(); } catch (e) { setRepErr(e.message || "Could not delete."); } }} className="underline text-red-300">Yes, delete</button><button onClick={() => setConfirmDel("")} className="underline text-[#b8c2d6]">No</button></span>
+                    : <button data-testid="report-delete" onClick={() => setConfirmDel(r.id)} className="underline text-[#78869b] hover:text-red-300">Delete</button>)}
                 </div>
               ))}
             </div>
@@ -1480,7 +1496,7 @@
             <ErrBox err={pub.err} />
             {pub.doc && (
               <div data-testid="published" className="border border-green-800 bg-[#10241A] rounded-lg p-3 space-y-2 text-xs">
-                <div className="text-green-300 font-semibold">Report published: {pub.doc.title}</div>
+                <div className="text-green-300 font-semibold">{pub.doc.report && pub.doc.report.replaced ? "Report updated (same link): " : "Report published: "}{pub.doc.title}</div>
                 <div className="flex flex-wrap items-center gap-2">
                   <input readOnly aria-label="Report link" value={link} onFocus={(e) => e.target.select()} className="flex-1 min-w-[240px] bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-white font-mono text-[11px]" />
                   <button data-testid="copy-link" onClick={() => { try { navigator.clipboard.writeText(link); } catch (_) { /* the link can still be selected and copied by hand */ } setPub((p) => ({ ...p, copied: true })); }} className="border border-[#3D3D3D] hover:border-amber-500 text-white px-3 py-1 rounded-md">{pub.copied ? "Copied" : "Copy link"}</button>
@@ -1833,6 +1849,24 @@
         );
       }
 
+      // v25: links between one client's tables are found and checked automatically; only strong, clean ones are approved without a person.
+      async function autoLinkRun(api, say, dataset) {
+        say("Looking for links between this client's tables...");
+        const r = await api({ action: "links_suggest", ...(dataset ? { dataset } : {}) });
+        const all = r.candidates.filter((c) => c.status === "new");
+        const todo = all.slice(0, 12);
+        let approved = 0, review = 0;
+        for (let i = 0; i < todo.length; i++) {
+          say("Checking links " + (i + 1) + " of " + todo.length + "...");
+          const x = await api({ action: "links_check", auto: true, a: todo[i].a, b: todo[i].b });
+          if (x.link.status === "approved") approved++; else review++;
+        }
+        const more = all.length - todo.length;
+        say("");
+        const text = todo.length === 0 ? "" : approved + " link(s) approved automatically" + (review ? ", " + review + " need your review (Links & drill-down tab)" : "") + (more > 0 ? ". " + more + " more to check later" : "") + ".";
+        return { approved, review, more, text };
+      }
+
       function LinkStats({ link }) {
         const st = link.stats; if (!st) return null;
         const pct = Math.round((st.match || 0) * 100);
@@ -1855,6 +1889,7 @@
         const [err, setErr] = useState(null);
         const [data, setData] = useState(null);
         const [prog, setProg] = useState("");
+        const [autoNote, setAutoNote] = useState("");
         const [chain, setChain] = useState(null);       // { levels: [dataset], labels: [..] }
         const [hname, setHname] = useState("");
         const [drill, setDrill] = useState("");
@@ -1927,8 +1962,10 @@
                 {data.candidates.length === 0 && <div data-testid="links-none" className="text-xs text-[#A0A0A0]">No likely links found. Link finding needs at least two tables with key-like columns such as a code or id.</div>}
                 {data.candidates.length > 0 && (
                   <div className="flex flex-wrap items-center gap-3 text-xs">
+                    <button data-testid="links-auto" onClick={async () => { setErr(null); try { const r = await autoLinkRun(api, setProg); await load(); setAutoNote(r.text || "No new links to check."); } catch (e) { setErr(e); setProg(""); } }} disabled={!!prog} className="border border-green-700 text-green-300 hover:bg-green-900/30 px-3 py-1 rounded-md disabled:opacity-50">Link automatically</button>
                     <button data-testid="links-check-all" onClick={checkAll} disabled={!!prog || data.candidates.every((c) => c.stats)} className="border border-[#3D3D3D] hover:border-amber-500 text-white px-3 py-1 rounded-md disabled:opacity-50">Check all</button>
                     {prog && <span data-testid="links-progress" className="text-amber-300">{prog}</span>}
+                    {!prog && autoNote && <span data-testid="links-auto-note" className="text-green-300">{autoNote}</span>}
                   </div>
                 )}
                 {data.candidates.map((c) => {
@@ -1944,7 +1981,10 @@
                       <LinkStats link={{ ...link, stats: c.stats || link.stats }} />
                       <div className="flex gap-2 mt-2 text-xs">
                         <button data-testid="link-check" disabled={busy === c.id} onClick={() => check(c)} className="border border-[#3D3D3D] hover:border-amber-500 text-white px-2 py-1 rounded disabled:opacity-50">{c.stats ? "Check again" : "Check"}</button>
-                        {c.stats && c.status !== "approved" && <button data-testid="link-approve" disabled={busy === c.id} onClick={() => decide(c, "approve")} className="border border-green-700 text-green-300 hover:bg-green-900/30 px-2 py-1 rounded disabled:opacity-50">Approve</button>}
+                        {c.stats && c.status !== "approved" && (c.stats.usable
+                          ? <button data-testid="link-approve" disabled={busy === c.id} onClick={() => decide(c, "approve")} className="border border-green-700 text-green-300 hover:bg-green-900/30 px-2 py-1 rounded disabled:opacity-50">Approve</button>
+                          : <span data-testid="link-cannot" className="text-[11px] text-[#A0A0A0] self-center">Cannot be approved: {c.stats.relation === "many-to-many" ? "both columns repeat values, so joining would multiply rows. Link through a table that has one row per value." : "no values match."}</span>)}
+                        {c.status === "approved" && (link.auto || c.auto) && <span data-testid="link-auto" className="text-[11px] text-green-300 self-center">Approved automatically</span>}
                         {c.stats && c.status !== "rejected" && <button data-testid="link-reject" disabled={busy === c.id} onClick={() => decide(c, "reject")} className="border border-red-800 text-red-300 hover:bg-red-900/30 px-2 py-1 rounded disabled:opacity-50">Reject</button>}
                       </div>
                     </div>
@@ -2011,6 +2051,18 @@
         const sortedHistory = history.list.slice().sort((a, b) => (String(a.created || "") < String(b.created || "") ? -1 : 1) * (order === "oldest" ? 1 : -1));
         const [viewsTick, setViewsTick] = useState(0);
         const [tab, setTab] = useState("upload");
+        const [autoMsg, setAutoMsg] = useState("");
+        const autoBusy = useRef(false);
+        const autoTimer = useRef(null);
+        const runAutoLink = () => {   // a new Gold view exists: link it to the client's other tables without being asked
+          clearTimeout(autoTimer.current);
+          autoTimer.current = setTimeout(async () => {
+            if (autoBusy.current) return;
+            autoBusy.current = true;
+            try { const r = await autoLinkRun(api, setAutoMsg); setAutoMsg(r.text); } catch (_) { setAutoMsg(""); } finally { autoBusy.current = false; }
+          }, 2500);
+        };
+        const viewsChanged = () => { onViewsChanged(); runAutoLink(); };
         const seq = useRef(0);
         const itemsRef = useRef([]);
         itemsRef.current = items;
@@ -2178,6 +2230,7 @@
               <span className="text-[11px] text-[#808080]">{items.length === 0 ? "Your list is empty. Drop a file above to start." : items.length + " on this screen. Clearing only tidies the screen."}</span>
             </div>
 
+            {autoMsg && <div data-testid="auto-link-banner" className="text-xs bg-[#10241A] border border-green-800 rounded-lg px-4 py-2 text-green-300">🔗 {autoMsg}</div>}
             {items.some((i) => i.done) && (
               <div data-testid="done-banner" className="flex flex-wrap items-center gap-3 text-xs bg-[#10241A] border border-green-800 rounded-lg px-4 py-2 text-green-300">
                 ✓ A data set is ready.
@@ -2197,7 +2250,7 @@
                       <button onClick={() => dismiss(it.id)} data-testid="item-dismiss" aria-label={"Dismiss " + it.name} title="Remove from this list (a running job carries on and stays in History)" className="text-[11px] text-[#A0A0A0] hover:text-white underline">Dismiss</button>
                     </div>
                   </div>
-                  {it.job && <JobCard job={it.job} api={iapi} onUpdate={(j) => upd(it.id, { job: j })} onAsk={onAsk} onViewsChanged={onViewsChanged} onDismiss={() => dismiss(it.id)} />}
+                  {it.job && <JobCard job={it.job} api={iapi} onUpdate={(j) => upd(it.id, { job: j })} onAsk={onAsk} onViewsChanged={viewsChanged} onDismiss={() => dismiss(it.id)} />}
                   {!it.job && !it.error && !it.done && (
                     <div data-testid="upload-progress" className="space-y-1">
                       <div className="flex justify-between text-[11px] font-mono text-[#C0C0C0]"><span>{it.stage === "upload" ? "Uploading" : it.stage === "bronze" ? "Stored in Bronze" : "Working"}</span><span>{(it.stage === "upload" ? Math.round((it.uploadPct || 0) * 0.2) : 25)}%</span></div>
@@ -2216,7 +2269,7 @@
 
                   {(it.order || []).map((ds) => it.datasets[ds] ? (
                     <MappingEditor key={ds} dataset={ds} api={iapi} onAsk={onAsk}
-                      onBuilt={() => { upd(it.id, { stage: "gold", done: true, msg: "Gold view ready." }); onViewsChanged(); setViewsTick((n) => n + 1); }} />
+                      onBuilt={() => { upd(it.id, { stage: "gold", done: true, msg: "Gold view ready." }); viewsChanged(); setViewsTick((n) => n + 1); }} />
                   ) : null)}
                 </div>
               );
@@ -2243,7 +2296,7 @@
                       <div className="text-sm text-white font-mono truncate">{j.file}</div>
                       <div data-testid="job-time" className="text-[11px] text-[#A0A0A0] font-mono">{fmtWhen(j.created)}{j.updated && j.updated !== j.created ? " · last update " + fmtWhen(j.updated) : ""}</div>
                     </div>
-                    <JobCard job={j} api={apiFor(history.client)} onUpdate={mergeJob} onAsk={onAsk} onViewsChanged={onViewsChanged} onDismiss={() => setHistory((h) => ({ ...h, list: h.list.filter((x) => x.id !== j.id) }))} />
+                    <JobCard job={j} api={apiFor(history.client)} onUpdate={mergeJob} onAsk={onAsk} onViewsChanged={viewsChanged} onDismiss={() => setHistory((h) => ({ ...h, list: h.list.filter((x) => x.id !== j.id) }))} />
                   </div>
                 ))}
                 {history.list.length >= history.limit && history.limit < 100 && (
@@ -2846,7 +2899,7 @@
                   <div className="text-xs font-mono space-y-1">
                     <div data-testid="who-role" className="text-white">{ROLE_LABELS[identity.role] || identity.role}</div>
                     <div className="text-[#A0A0A0] truncate" title={identity.email}>{identity.email}</div>
-                    <div data-testid="who-version" className="text-[#707070]">Server {identity.version || "older than v24 - redeploy the backend"} · Screen v24</div>
+                    <div data-testid="who-version" className="text-[#707070]">Server {identity.version || "older than v25 - redeploy the backend"} · Screen v25</div>
                     <button onClick={onSignOut} className="mt-2 text-[#A0A0A0] hover:text-white underline">Sign out</button>
                   </div>
                 )}
@@ -3000,7 +3053,7 @@
                 )}
 
                 {activeTab === "dashboard" && (
-                  <DashboardHub client={acting || identity.tenant_id} api={(p) => callBackend(session.url, session.token, p)} openId={openReportId} onOpenHandled={() => setOpenReportId("")} onPublished={(tool, title, n) => callBackend(session.url, session.token, { action: "publish_report", tool, title, tiles: n }).catch(() => {})} tiles={tiles} onRemove={(id) => setTiles((p) => p.filter((x) => x.id !== id))} onRefresh={refreshTile}
+                  <DashboardHub canManage={CAN_ONBOARD.includes(role)} client={acting || identity.tenant_id} api={(p) => callBackend(session.url, session.token, p)} openId={openReportId} onOpenHandled={() => setOpenReportId("")} onPublished={(tool, title, n) => callBackend(session.url, session.token, { action: "publish_report", tool, title, tiles: n }).catch(() => {})} tiles={tiles} onRemove={(id) => setTiles((p) => p.filter((x) => x.id !== id))} onRefresh={refreshTile}
                     onAsk={(q) => { setActiveTab("chat"); sendText(q); }} />
                 )}
 
