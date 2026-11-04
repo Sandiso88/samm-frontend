@@ -1952,7 +1952,7 @@
                         <button data-testid="silver-map" onClick={() => setOpenMap(openMap === d.dataset ? null : d.dataset)} className="underline text-amber-400 hover:text-amber-300">{openMap === d.dataset ? "Close" : "Check how columns are matched"}</button>
                         {!d.view && <button data-testid="silver-build" disabled={busy === d.dataset} onClick={() => buildGold(d)} className="underline text-amber-400 hover:text-amber-300 disabled:opacity-50">{busy === d.dataset ? "Building..." : "Build Gold view"}</button>}
                       </div>
-                      {d.kind === "combined" && (d.sources || []).length > 0 && <div className="text-[11px] text-[#808080]">Files in it: {(d.sources || []).map((x) => friendlyDs(x)).join(", ")}</div>}
+                      {d.made_of && d.made_of.files.length > 0 && (d.kind === "combined" || d.kind === "list") && <div data-testid="silver-made-of" className="text-[11px] text-[#808080]">{d.kind === "list" ? "Built from: " : "Files in it: "}{d.made_of.files.map((x) => x.title).join(", ")}</div>}
                       {openData === d.dataset && <DataViewer api={api} dataset={d.dataset} view={d.view} initial="silver" />}
                       {openMap === d.dataset && <MappingEditor key={d.dataset} dataset={d.dataset} api={api} onAsk={onAsk} onClose={() => setOpenMap(null)} onBuilt={() => load()} />}
                       {["engineer", "admin", "system_admin"].includes(window.__sammRole) && <DatasetAdvanced api={api} dataset={d.dataset} layer="silver" />}
@@ -2042,6 +2042,13 @@
                   {["engineer", "admin", "system_admin"].includes(window.__sammRole) && <button data-testid={"gold-linked-" + d.dataset} disabled={busy === d.dataset} onClick={() => addLists(d)} className="underline text-amber-400 hover:text-amber-300 disabled:opacity-50">{busy === d.dataset ? "Adding..." : d.linked_view ? "Refresh with linked lists" : "Add linked lists"}</button>}
                   {d.linked_view && <button data-testid="gold-linked-ask" onClick={() => onAsk(d.linked_view)} className="underline text-green-300 hover:text-green-200">Ask about it with linked lists</button>}
                 </div>
+                {d.made_of && (
+                  <div data-testid="gold-made-of" className="text-[11px] text-[#A0A0A0]">
+                    <span className="text-white font-semibold">Made of:</span> {d.made_of.files.map((x) => x.title).join(" + ")}
+                    {d.made_of.lists.length > 0 && <span> · <span className="text-white font-semibold">linked to:</span> {d.made_of.lists.map((x) => x.title).join(", ")}</span>}
+                    {d.made_of.lists.length === 0 && !d.made_of.from_lists && <span className="text-[#808080]"> · not linked to any shared list yet</span>}
+                  </div>
+                )}
                 <DatasetTools api={api} dataset={d.dataset} view={d.view} onAsk={onAsk} layer="gold" />
                 {["engineer", "admin", "system_admin"].includes(window.__sammRole) && <GoldRemove api={api} dataset={d.dataset} onDone={() => load()} />}
                 {open === d.dataset && <MappingEditor key={d.dataset} dataset={d.dataset} api={api} onAsk={onAsk} onClose={() => setOpen(null)} onBuilt={() => load()} />}
@@ -3536,7 +3543,7 @@
                   <div className="text-xs font-mono space-y-1">
                     <div data-testid="who-role" className="text-white">{ROLE_LABELS[identity.role] || identity.role}</div>
                     <div className="text-[#A0A0A0] truncate" title={identity.email}>{identity.email}</div>
-                    <div data-testid="who-version" className="text-[#707070]">Server {identity.version || "older than v32 - redeploy the backend"} · Screen v32</div>
+                    <div data-testid="who-version" className="text-[#707070]">Server {identity.version || "older than v33 - redeploy the backend"} · Screen v33</div>
                     <button onClick={onSignOut} className="mt-2 text-[#A0A0A0] hover:text-white underline">Sign out</button>
                   </div>
                 )}
