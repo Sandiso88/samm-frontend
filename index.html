@@ -1523,6 +1523,8 @@
         const [msg, setMsg] = useState("");
         const [err, setErr] = useState("");
         const [busy, setBusy] = useState(false);
+        const [rem, setRem] = useState(null);
+        const [typed, setTyped] = useState("");
         const bt = "border border-[#3D3D3D] hover:border-amber-500 text-white text-xs px-3 py-1 rounded-md disabled:opacity-50";
         const inp = "bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-xs text-white";
         useEffect(() => {
@@ -1537,6 +1539,17 @@
         const check = async () => {
           setBusy(true); setErr(""); setMsg(""); setPlan(null);
           try { setPlan(await api({ action: "dataset_rename_id", dataset, new_name: name })); } catch (e) { setErr(e.message || "Could not check."); } finally { setBusy(false); }
+        };
+        const checkRemove = async () => {
+          setBusy(true); setErr(""); setMsg(""); setRem(null); setTyped("");
+          try { setRem(await api({ action: "dataset_remove", dataset })); } catch (e) { setErr(e.message || "Could not check."); } finally { setBusy(false); }
+        };
+        const removeNow = async () => {
+          setBusy(true); setErr("");
+          try {
+            const r = await api({ action: "dataset_remove", dataset, apply: true, confirm: typed.trim() });
+            setRem(null); window.dispatchEvent(new CustomEvent("samm-titles-changed")); window.dispatchEvent(new CustomEvent("samm-datasets-changed", { detail: { msg: "Removed " + friendlyDs(dataset) + ". The uploaded original file was not touched." } }));
+          } catch (e) { setErr(e.message || "Could not remove."); } finally { setBusy(false); }
         };
         const apply = async () => {
           setBusy(true); setErr("");
@@ -1584,6 +1597,22 @@
                       )}
                       <button data-testid="adv-save-key" disabled={busy || (mode === "merge" && !key)} onClick={saveKey} className={bt}>Save</button>
                     </>
+                  )}
+                </div>
+                <div className="space-y-2 border-t border-[#2D2D2D] pt-2">
+                  <div className="font-semibold text-white">Remove this dataset</div>
+                  <div>Removes the data, Gold views, mapping, rules, history card, reports, links, drill-downs and analyst access for this client. The file you uploaded stays in storage, so you can upload it again.</div>
+                  <button data-testid="rem-check" disabled={busy} onClick={checkRemove} className={bt}>Check what will be removed</button>
+                  {rem && rem.plan && (
+                    <div data-testid="rem-plan" className="bg-[#151515] border border-[#2D2D2D] rounded p-2 space-y-1">
+                      <div className="text-white">This is a {rem.plan.kind}. It will remove:</div>
+                      <div>{[["views", "Gold view(s)"], ["personal_views", "personal view(s)"], ["reports", "report(s)"], ["links", "link(s)"], ["drill_downs", "drill-down(s)"], ["access_grants", "analyst access grant(s)"], ["history_cards", "history card(s)"]].filter(([k]) => rem.plan[k]).map(([k, l]) => rem.plan[k] + " " + l).join(", ") || "Nothing else is attached."}</div>
+                      {(rem.plan.warnings || []).map((w, i) => <div key={i} className="text-amber-200">{w}</div>)}
+                      <div className="flex flex-wrap gap-2 items-center pt-1">
+                        <input data-testid="rem-confirm" aria-label="Type the dataset name to confirm" value={typed} onChange={(e) => setTyped(e.target.value)} placeholder={"Type " + dataset + " to confirm"} className={inp + " w-72"} />
+                        <button data-testid="rem-apply" disabled={busy || typed.trim() !== dataset} onClick={removeNow} className="bg-red-700 hover:bg-red-600 text-white font-bold px-3 py-1 rounded-md disabled:opacity-50">{busy ? "Removing..." : "Remove now"}</button>
+                      </div>
+                    </div>
                   )}
                 </div>
                 {err && <div data-testid="adv-error" className="text-red-300">{err}</div>}
@@ -2065,6 +2094,7 @@
           setBusy("m" + item.id); setErr(null); setMnote("");
           try {
             if (kind === "combine") { const r = await api({ action: "combine_apply", datasets: item.datasets, extend: item.extend || undefined, key: item.key || undefined, confirm: item.needs_confirm ? true : undefined }); setMnote("Combined " + item.datasets.length + " files into one table of " + r.stats.rows + " rows" + (r.stats.replaced ? " (" + r.stats.replaced + " older rows replaced by newer ones)" : "") + "." + carriedText(r.carried)); }
+            else if (kind === "undo") { const r = await api({ action: "combine_undo", dataset: item.dataset }); setMnote("Undid the combine: " + r.pieces.length + " files are separate tables again." + carriedText(r.restored)); window.dispatchEvent(new CustomEvent("samm-titles-changed")); }
             else if (kind === "duplicate") { const r = await api({ action: "duplicate_apply", keep: item.keep, duplicates: item.duplicates }); setMnote("Kept " + item.keep_label + " as the single source and hid " + r.hidden.length + " identical cop" + (r.hidden.length === 1 ? "y" : "ies") + "." + carriedText(r.carried)); }
             else if (kind === "dimension") { const r = await api({ action: "dimension_apply", id: item.id }); setMnote("Built the shared list of " + item.column.replace(/_/g, " ") + " (" + r.values + " values) and linked " + r.linked + " tables to it" + (r.need_review ? "; " + r.need_review + " link(s) need your review below." : ".")); }
             else { await api({ action: "model_dismiss", kind: kind.replace("dismiss-", ""), id: item.id }); }
@@ -2139,13 +2169,22 @@
             {open && data && (
               <div className="space-y-3">
                 {model && mnote && <div data-testid="model-note" className="text-xs text-green-300">{mnote}</div>}
-                {model && (model.combine.length > 0 || model.dimensions.length > 0 || model.duplicates.length > 0) && (
+                {model && (model.combine.length > 0 || model.dimensions.length > 0 || model.duplicates.length > 0 || (model.combined || []).some((c) => c.undo)) && (
                   <div data-testid="model-panel" className="space-y-2">
                     <div className="text-xs font-bold text-white">What SAMM can build from your data{model.mode === "auto" ? " (automatic mode builds these for you)" : ""}</div>
+                    {(model.combined || []).filter((c) => c.undo).map((c) => (
+                      <div key={c.dataset} data-testid="combined-row" className="border border-[#2D2D2D] rounded-lg p-3 bg-[#1B1B1B] text-xs space-y-1">
+                        <div className="text-white font-semibold">Combined table: {c.label} · {(c.sources || []).length} files</div>
+                        <div className="text-[#A0A0A0]">Made from {(c.sources || []).map((x) => x.replace(/^silver_/, "")).join(", ")}. Undo brings the files back as separate tables and moves their links, reports and access back to them.</div>
+                        <div className="flex gap-2 pt-1">
+                          <button data-testid="combine-undo" disabled={busy === "m" + c.dataset} onClick={() => modelDo("undo", c)} className="border border-[#3D3D3D] text-[#A0A0A0] hover:border-amber-500 px-2 py-1 rounded disabled:opacity-50">Undo combine</button>
+                        </div>
+                      </div>
+                    ))}
                     {model.duplicates.map((d) => (
                       <div key={d.id} data-testid="duplicate-row" className="border border-[#2D2D2D] rounded-lg p-3 bg-[#1B1B1B] text-xs space-y-1">
                         <div className="text-white font-semibold">Identical copies: {d.keep_label} and {d.labels.join(", ")}</div>
-                        <div className="text-[#A0A0A0]">They hold exactly the same {d.rows} rows. Keep {d.keep_label} as the single source of truth. The copy is hidden, its data stays in storage, and anything linked to it moves to {d.keep_label}.</div>
+                        <div className="text-[#A0A0A0]">{d.reason === "data" ? "They hold the same data: the same " + d.entities + " " + String(d.entity || "").replace(/_/g, " ") + " with the same rows and totals. " + d.keep_label + " has the most columns, so keep it as the single source of truth." : "They hold exactly the same " + d.rows + " rows. Keep " + d.keep_label + " as the single source of truth."} The copy is hidden, its data stays in storage, and anything linked to it moves to {d.keep_label}.</div>
                         <div className="flex gap-2 pt-1">
                           <button data-testid="duplicate-apply" disabled={busy === "m" + d.id} onClick={() => modelDo("duplicate", d)} className="border border-green-700 text-green-300 hover:bg-green-900/30 px-2 py-1 rounded disabled:opacity-50">Keep one, hide the copy</button>
                           <button data-testid="duplicate-dismiss" disabled={busy === "m" + d.id} onClick={() => modelDo("dismiss-duplicate", d)} className="border border-[#3D3D3D] text-[#A0A0A0] px-2 py-1 rounded disabled:opacity-50">Not now</button>
@@ -3131,7 +3170,7 @@
           if (demo) return;
           try {
             const r = await callBackend(session.url, session.token, { action: "views" });
-            const tmap = {}; (r.views || []).forEach((v) => { if (v.title) tmap[v.name] = { title: v.title, subject: v.subject || "" }; });
+            const tmap = { ...(r.titles || {}) }; (r.views || []).forEach((v) => { if (v.title) tmap[v.name] = { title: v.title, subject: v.subject || "" }; });
             window.__sammTitles = tmap;
             window.dispatchEvent(new CustomEvent("samm-titles-ready"));
             setViews(r.views || []);
@@ -3394,7 +3433,7 @@
                   <div className="text-xs font-mono space-y-1">
                     <div data-testid="who-role" className="text-white">{ROLE_LABELS[identity.role] || identity.role}</div>
                     <div className="text-[#A0A0A0] truncate" title={identity.email}>{identity.email}</div>
-                    <div data-testid="who-version" className="text-[#707070]">Server {identity.version || "older than v30 - redeploy the backend"} · Screen v30</div>
+                    <div data-testid="who-version" className="text-[#707070]">Server {identity.version || "older than v31 - redeploy the backend"} · Screen v31</div>
                     <button onClick={onSignOut} className="mt-2 text-[#A0A0A0] hover:text-white underline">Sign out</button>
                   </div>
                 )}
