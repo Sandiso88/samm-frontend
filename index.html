@@ -2054,11 +2054,18 @@
         const [drill, setDrill] = useState("");
         const [model, setModel] = useState(null);      // suggestions: combine same-shape files, build shared lists
         const [mnote, setMnote] = useState("");
-        const loadModel = async () => { try { const r = await api({ action: "model_suggest" }); setModel(r && Array.isArray(r.combine) && Array.isArray(r.dimensions) ? r : null); } catch (e) { setModel(null); } };
+        const loadModel = async () => { try { const r = await api({ action: "model_suggest" }); setModel(r && Array.isArray(r.combine) && Array.isArray(r.dimensions) ? { ...r, duplicates: Array.isArray(r.duplicates) ? r.duplicates : [] } : null); } catch (e) { setModel(null); } };
+        const carriedText = (c) => {
+          if (!c) return "";
+          const bits = [];
+          if (c.links) bits.push(c.links + " link(s)"); if (c.drill_downs) bits.push(c.drill_downs + " drill-down(s)"); if (c.reports) bits.push(c.reports + " report(s)"); if (c.lists) bits.push(c.lists + " shared list(s)"); if (c.grants) bits.push(c.grants + " access grant(s)"); if (c.personal_views) bits.push(c.personal_views + " personal view(s)");
+          return (bits.length ? " Moved over: " + bits.join(", ") + "." : "") + (c.links_review ? " " + c.links_review + " link(s) need your review below." : "");
+        };
         const modelDo = async (kind, item) => {
           setBusy("m" + item.id); setErr(null); setMnote("");
           try {
-            if (kind === "combine") { const r = await api({ action: "combine_apply", datasets: item.datasets, extend: item.extend || undefined, key: item.key || undefined }); setMnote("Combined " + item.datasets.length + " files into one table of " + r.stats.rows + " rows" + (r.stats.replaced ? " (" + r.stats.replaced + " older rows replaced by newer ones)." : ".")); }
+            if (kind === "combine") { const r = await api({ action: "combine_apply", datasets: item.datasets, extend: item.extend || undefined, key: item.key || undefined, confirm: item.needs_confirm ? true : undefined }); setMnote("Combined " + item.datasets.length + " files into one table of " + r.stats.rows + " rows" + (r.stats.replaced ? " (" + r.stats.replaced + " older rows replaced by newer ones)" : "") + "." + carriedText(r.carried)); }
+            else if (kind === "duplicate") { const r = await api({ action: "duplicate_apply", keep: item.keep, duplicates: item.duplicates }); setMnote("Kept " + item.keep_label + " as the single source and hid " + r.hidden.length + " identical cop" + (r.hidden.length === 1 ? "y" : "ies") + "." + carriedText(r.carried)); }
             else if (kind === "dimension") { const r = await api({ action: "dimension_apply", id: item.id }); setMnote("Built the shared list of " + item.column.replace(/_/g, " ") + " (" + r.values + " values) and linked " + r.linked + " tables to it" + (r.need_review ? "; " + r.need_review + " link(s) need your review below." : ".")); }
             else { await api({ action: "model_dismiss", kind: kind.replace("dismiss-", ""), id: item.id }); }
             await loadModel(); await load();
@@ -2132,15 +2139,27 @@
             {open && data && (
               <div className="space-y-3">
                 {model && mnote && <div data-testid="model-note" className="text-xs text-green-300">{mnote}</div>}
-                {model && (model.combine.length > 0 || model.dimensions.length > 0) && (
+                {model && (model.combine.length > 0 || model.dimensions.length > 0 || model.duplicates.length > 0) && (
                   <div data-testid="model-panel" className="space-y-2">
                     <div className="text-xs font-bold text-white">What SAMM can build from your data{model.mode === "auto" ? " (automatic mode builds these for you)" : ""}</div>
+                    {model.duplicates.map((d) => (
+                      <div key={d.id} data-testid="duplicate-row" className="border border-[#2D2D2D] rounded-lg p-3 bg-[#1B1B1B] text-xs space-y-1">
+                        <div className="text-white font-semibold">Identical copies: {d.keep_label} and {d.labels.join(", ")}</div>
+                        <div className="text-[#A0A0A0]">They hold exactly the same {d.rows} rows. Keep {d.keep_label} as the single source of truth. The copy is hidden, its data stays in storage, and anything linked to it moves to {d.keep_label}.</div>
+                        <div className="flex gap-2 pt-1">
+                          <button data-testid="duplicate-apply" disabled={busy === "m" + d.id} onClick={() => modelDo("duplicate", d)} className="border border-green-700 text-green-300 hover:bg-green-900/30 px-2 py-1 rounded disabled:opacity-50">Keep one, hide the copy</button>
+                          <button data-testid="duplicate-dismiss" disabled={busy === "m" + d.id} onClick={() => modelDo("dismiss-duplicate", d)} className="border border-[#3D3D3D] text-[#A0A0A0] px-2 py-1 rounded disabled:opacity-50">Not now</button>
+                        </div>
+                      </div>
+                    ))}
                     {model.combine.map((c) => (
                       <div key={c.id} data-testid="combine-row" className="border border-[#2D2D2D] rounded-lg p-3 bg-[#1B1B1B] text-xs space-y-1">
-                        <div className="text-white font-semibold">{c.extend ? "Add to the combined table: " : "These files have the same columns: "}{c.labels.join(", ")}</div>
-                        <div className="text-[#A0A0A0]">{Math.round(c.ratio * 100)}% of columns match. Combined: {c.preview.rows} rows{c.key ? ", matched on " + c.key.replace(/_/g, " ") + (c.preview.replaced ? " (" + c.preview.replaced + " duplicates keep the newest)" : "") : ""}{c.preview.identical_rows ? ". " + c.preview.identical_rows + " rows are identical in more than one file" : ""}.{c.level !== "offer" ? " Check this one: the match is partial." : ""}</div>
+                        <div className="text-white font-semibold">{c.extend ? "Add to the combined table " + (c.extend_label || "") + ": " : "These files have the same columns: "}{c.labels.join(", ")}</div>
+                        <div className="text-[#A0A0A0]">{Math.round(c.ratio * 100)}% of columns match. Combined: {c.preview.rows} rows{c.key ? ", matched on " + c.key.replace(/_/g, " ") + (c.preview.replaced ? " (" + c.preview.replaced + " duplicates keep the newest)" : "") : ""}{c.preview.identical_rows ? ". " + c.preview.identical_rows + " rows are identical in more than one file" : ""}.{c.needs_confirm ? " Check this one: the match is partial." : ""}</div>
+                        {!c.extend && c.target && <div data-testid="combine-target" className="text-[#A0A0A0]">It will be called <span className="text-amber-300 font-mono">{c.target.replace(/^silver_/, "")}</span>.</div>}
+                        {c.needs_confirm && c.differences && c.differences.length > 0 && <div data-testid="combine-differences" className="text-amber-200">Columns that are not in every file: {c.differences.map((x) => x.column + " (only in " + x.only_in.map((d) => (c.labels[c.datasets.indexOf(d)] || d)).join(", ") + ")").join("; ")}</div>}
                         <div className="flex gap-2 pt-1">
-                          <button data-testid="combine-apply" disabled={busy === "m" + c.id} onClick={() => modelDo("combine", c)} className="border border-green-700 text-green-300 hover:bg-green-900/30 px-2 py-1 rounded disabled:opacity-50">Combine</button>
+                          <button data-testid="combine-apply" disabled={busy === "m" + c.id} onClick={() => modelDo("combine", c)} className="border border-green-700 text-green-300 hover:bg-green-900/30 px-2 py-1 rounded disabled:opacity-50">{c.needs_confirm ? "Confirm and combine" : "Combine"}</button>
                           <button data-testid="combine-dismiss" disabled={busy === "m" + c.id} onClick={() => modelDo("dismiss-combine", c)} className="border border-[#3D3D3D] text-[#A0A0A0] px-2 py-1 rounded disabled:opacity-50">Not now</button>
                         </div>
                       </div>
@@ -3375,7 +3394,7 @@
                   <div className="text-xs font-mono space-y-1">
                     <div data-testid="who-role" className="text-white">{ROLE_LABELS[identity.role] || identity.role}</div>
                     <div className="text-[#A0A0A0] truncate" title={identity.email}>{identity.email}</div>
-                    <div data-testid="who-version" className="text-[#707070]">Server {identity.version || "older than v29 - redeploy the backend"} · Screen v29</div>
+                    <div data-testid="who-version" className="text-[#707070]">Server {identity.version || "older than v30 - redeploy the backend"} · Screen v30</div>
                     <button onClick={onSignOut} className="mt-2 text-[#A0A0A0] hover:text-white underline">Sign out</button>
                   </div>
                 )}
