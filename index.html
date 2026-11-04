@@ -2632,7 +2632,7 @@
           setItems((p) => p.map((i) => (i.id === id ? { ...i, datasets: { ...i.datasets, [ds]: { open: true } } } : i)));
         };
 
-        const runFile = async (id, file, client, dsName) => {
+        const runFile = async (id, file, client, dsName, opts) => {
           const api = apiFor(client);
           try {
             upd(id, { stage: "upload", msg: "Requesting a secure upload link..." });
@@ -2642,7 +2642,7 @@
             await putFile(init.upload_url, file, (pct) => upd(id, { uploadPct: pct, msg: "Uploading to Bronze... " + pct + "%" }));
             upd(id, { stage: "bronze", msg: "Stored in Bronze. SAMM takes it from here..." });
             let started = null;
-            try { started = await api({ action: "job_start", key: init.key }); } catch (e) {
+            try { started = await api({ action: "job_start", key: init.key, ...(opts && opts.toReports ? { to_reports: true, batch: opts.batch } : {}) }); } catch (e) {
               if (!(e && e.status === 400 && /unknown action/i.test(e.message || ""))) throw e;   // older back end: use the step-by-step flow below
             }
             if (started && started.job) { upd(id, { stage: "silver", msg: "", job: started.job }); return; }
@@ -2693,6 +2693,60 @@
           });
           setStaged([]);
         };
+
+        // v34: choose a whole folder for one client and run it all the way to reports
+        const DATA_EXT = /\.(csv|tsv|json|jsonl|txt|xlsx|xlsm)$/i;
+        const [folder, setFolder] = useState(null);
+        const [toReports, setToReports] = useState(true);
+        const [runs, setRuns] = useState([]);
+        const pickFolder = (fileList) => {
+          const all = Array.from(fileList || []);
+          const files = all.filter((f) => DATA_EXT.test(f.name) && !/^(~\$|\.)/.test(f.name));
+          const first = all[0] && all[0].webkitRelativePath ? String(all[0].webkitRelativePath).split("/")[0] : "folder";
+          setFolder(all.length ? { name: first, files, skipped: all.length - files.length, client: nowClient() } : null);
+        };
+        const startFolder = () => {
+          if (!folder || !folder.files.length) return;
+          const batch = "b" + Date.now().toString(36) + (++seq.current);
+          const ids = [];
+          folder.files.forEach((file) => {
+            const id = "f" + ++seq.current; ids.push(id);
+            setItems((p) => [{ id, client: folder.client, batch: toReports ? batch : undefined, name: file.name, size: file.size, stage: "upload", msg: "Queued", datasets: {}, order: [], error: null, done: false }, ...p]);
+            runFile(id, file, folder.client, "", { toReports, batch });
+          });
+          if (toReports) setRuns((p) => [{ id: batch, client: folder.client, folder: folder.name, total: ids.length, status: "running", msg: "", reports: [], failed: 0 }, ...p]);
+          setFolder(null);
+        };
+        const finishRun = async (run) => {
+          const a = apiFor(run.client);
+          const say = (m) => setRuns((p) => p.map((r) => (r.id === run.id ? { ...r, msg: m } : r)));
+          const mine = itemsRef.current.filter((i) => i.batch === run.id);
+          const failed = mine.filter((i) => i.error || (i.job && i.job.status === "failed")).length;
+          try {
+            const dss = []; mine.forEach((i) => Object.keys((i.job && i.job.datasets) || {}).forEach((d) => { if (dss.indexOf(d) < 0) dss.push(d); }));
+            say("Linking the tables...");
+            try { await autoLinkRun(a, say); } catch (_) { /* links are a bonus: reports still go ahead */ }
+            say("Setting up drill-downs...");
+            try { await a({ action: "drill_auto" }); } catch (_) { /* optional */ }
+            const tg = (await a({ action: "batch_targets", datasets: dss })).targets || [];
+            const reports = [];
+            for (let i = 0; i < tg.length; i++) {
+              say("Publishing report " + (i + 1) + " of " + tg.length + "...");
+              try { const r = await a({ action: "report_publish", dataset: tg[i].dataset }); reports.push({ id: r.id, title: r.title, client: r.client || run.client, replaced: !!(r.report && r.report.replaced) }); }
+              catch (e) { reports.push({ title: tg[i].title, error: (e && e.message) || "Could not publish." }); }
+            }
+            setRuns((p) => p.map((r) => (r.id === run.id ? { ...r, status: "done", msg: "", reports, failed } : r)));
+            onViewsChanged();
+          } catch (e) { setRuns((p) => p.map((r) => (r.id === run.id ? { ...r, status: "failed", msg: "", err: e, failed } : r))); }
+        };
+        useEffect(() => {
+          runs.filter((r) => r.status === "running").forEach((r) => {
+            const mine = items.filter((i) => i.batch === r.id);
+            if (mine.length < r.total) return;
+            const over = (i) => i.error || i.done || (i.job && ["done", "failed"].includes(i.job.status));
+            if (mine.every(over)) { setRuns((p) => p.map((x) => (x.id === r.id ? { ...x, status: "finishing" } : x))); finishRun(r); }
+          });
+        }, [items, runs]);
 
         const runPipeline = async () => {
           setPipe({ busy: true, msg: "", err: null });
@@ -2760,6 +2814,27 @@
                 <div className="text-[11px] text-[#808080] mt-1">Up to 25 MB for csv/json/txt, 50 MB for Excel, 100 MB for archives</div>
                 <input id="onb-file" data-testid="onb-file" type="file" multiple accept={ACCEPT} className="hidden" onChange={(e) => { addFiles(e.target.files); e.target.value = ""; }} />
               </label>
+              <div className="text-[11px] text-[#808080]">or <label htmlFor="onb-folder" data-testid="folder-choose" className="underline cursor-pointer text-amber-400 hover:text-amber-300">choose a whole folder</label> for one client and let SAMM take it all the way to reports.
+                <input id="onb-folder" data-testid="onb-folder" type="file" multiple webkitdirectory="" directory="" className="hidden" onChange={(e) => { pickFolder(e.target.files); e.target.value = ""; }} /></div>
+              {folder && (
+                <div data-testid="folder-card" className="border border-[#3D3D3D] rounded-xl p-4 space-y-3 bg-[#1E1E1E] text-xs">
+                  <div className="text-sm font-semibold text-white">Upload the folder "{folder.name}"</div>
+                  <div className="text-[#C0C0C0]"><span data-testid="folder-count">{folder.files.length} file{folder.files.length === 1 ? "" : "s"}</span> will go to the client <b data-testid="folder-client" className="text-white">{(clientNames || {})[folder.client] || folder.client || "your client"}</b>{folder.skipped > 0 ? ". " + folder.skipped + " other file(s) in the folder are not data files and are left out" : ""}.</div>
+                  {(clients || []).length > 1 && (
+                    <label className="flex flex-wrap items-center gap-2 text-[#C0C0C0]">Client
+                      <select data-testid="folder-client-select" aria-label="Client for this folder" value={folder.client || ""} onChange={(e) => setFolder({ ...folder, client: e.target.value })} className="bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-white">
+                        {clients.map((c) => <option key={c} value={c}>{(clientNames || {})[c] || c}</option>)}
+                      </select>
+                    </label>
+                  )}
+                  <div className="text-[11px] text-[#808080] max-h-24 overflow-auto font-mono">{folder.files.slice(0, 40).map((f) => f.name).join(", ")}{folder.files.length > 40 ? " ..." : ""}</div>
+                  <label className="flex items-center gap-2 text-[#C0C0C0]"><input data-testid="folder-to-reports" type="checkbox" checked={toReports} onChange={(e) => setToReports(e.target.checked)} /> Run all the way to reports (SAMM maps, builds, links and publishes a report for each Gold view without stopping to ask)</label>
+                  <div className="flex gap-2">
+                    <button data-testid="folder-go" disabled={!folder.files.length} onClick={startFolder} className="bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-bold text-sm px-4 py-2 rounded-lg">Upload {folder.files.length} file{folder.files.length === 1 ? "" : "s"} to {(clientNames || {})[folder.client] || folder.client}</button>
+                    <button onClick={() => setFolder(null)} className="border border-[#3D3D3D] text-white text-sm px-4 py-2 rounded-lg">Cancel</button>
+                  </div>
+                </div>
+              )}
               {staged.length > 0 && (
                 <div data-testid="staged" className="border border-[#3D3D3D] rounded-xl p-4 space-y-3 bg-[#1E1E1E]">
                   <div className="text-sm font-semibold text-white">Name your data before it goes in</div>
@@ -2808,6 +2883,31 @@
                 <button data-testid="go-gold" onClick={() => setTab("gold")} className="underline text-green-200 hover:text-white">View it in Gold views</button>
               </div>
             )}
+            {runs.map((r) => {
+              const mine = items.filter((i) => i.batch === r.id);
+              const fin = mine.filter((i) => i.error || i.done || (i.job && ["done", "failed"].includes(i.job.status))).length;
+              return (
+                <div key={r.id} data-testid="folder-run" className="border border-[#2D5A3D] bg-[#10241A] rounded-xl p-4 space-y-2 text-xs">
+                  <div className="text-green-300 font-semibold">Folder "{r.folder}" for {(clientNames || {})[r.client] || r.client}: {r.status === "done" ? "finished" : r.status === "failed" ? "stopped" : "running"}</div>
+                  {r.status !== "done" && r.status !== "failed" && <div data-testid="folder-progress" className="text-[#C0C0C0]">{r.status === "running" ? fin + " of " + r.total + " files processed" : (r.msg || "Finishing...")}</div>}
+                  {r.status === "done" && (
+                    <div className="space-y-2">
+                      <div className="text-[#C0C0C0]">{r.reports.filter((x) => x.id).length} report(s) published{r.failed ? "; " + r.failed + " file(s) failed (open them below and press Retry)" : ""}{r.reports.some((x) => x.error) ? "; " + r.reports.filter((x) => x.error).length + " could not be published" : ""}.</div>
+                      {r.reports.map((x, i) => (
+                        <div key={i} data-testid="folder-report" className="flex flex-wrap items-center gap-2">
+                          <span className="text-white">{x.title}</span>
+                          {x.id ? <>
+                            <button data-testid="folder-open-report" onClick={() => window.dispatchEvent(new CustomEvent("samm-open-report", { detail: { id: x.id } }))} className="underline text-amber-400 hover:text-amber-300">Open report</button>
+                            <button onClick={() => { try { navigator.clipboard.writeText(reportLink(x.id, x.client)); } catch (_) { /* the link can still be opened from Reports */ } }} className="underline text-[#A0A0A0] hover:text-white">Copy link</button>
+                          </> : <span className="text-red-300">{x.error}</span>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {r.status === "failed" && <ErrBox err={r.err} />}
+                </div>
+              );
+            })}
             {items.map((it) => {
               const idx = STAGES.findIndex((s) => s[0] === it.stage);
               const iapi = apiFor(it.client);
@@ -3543,7 +3643,7 @@
                   <div className="text-xs font-mono space-y-1">
                     <div data-testid="who-role" className="text-white">{ROLE_LABELS[identity.role] || identity.role}</div>
                     <div className="text-[#A0A0A0] truncate" title={identity.email}>{identity.email}</div>
-                    <div data-testid="who-version" className="text-[#707070]">Server {identity.version || "older than v33 - redeploy the backend"} · Screen v33</div>
+                    <div data-testid="who-version" className="text-[#707070]">Server {identity.version || "older than v34 - redeploy the backend"} · Screen v34</div>
                     <button onClick={onSignOut} className="mt-2 text-[#A0A0A0] hover:text-white underline">Sign out</button>
                   </div>
                 )}
