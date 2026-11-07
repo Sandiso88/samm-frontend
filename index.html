@@ -24,7 +24,7 @@
     <div id="root"></div>
 
     <script type="text/babel">
-      const { useState, useEffect, useRef } = React;
+      const { useState, useEffect, useRef, useMemo } = React;
 
       // ------------------------------------------------------------------
       // CONFIG
@@ -2567,6 +2567,216 @@
         );
       }
 
+      // v35: direct database connections (additive: files and folders work exactly as before)
+      function DbPanel({ client, clientName, apiFor, onJobs }) {
+        const api = useMemo(() => apiFor(client), [client]);
+        const blank = { id: "", name: "", type: "sqlserver", host: "", port: "", database: "", user: "", password: "", encrypt: true, verify_cert: true };
+        const [types, setTypes] = useState([]);
+        const [list, setList] = useState(null);
+        const [form, setForm] = useState(null);
+        const [sel, setSel] = useState(null);            // the connection whose tables are being picked
+        const [tabs, setTabs] = useState(null);
+        const [pick, setPick] = useState({});
+        const [incr, setIncr] = useState({});
+        const [rowLimit, setRowLimit] = useState(1000000);
+        const [sched, setSched] = useState({ every: "off", hour: 2, day: 0 });
+        const [toReports, setToReports] = useState(true);
+        const [busy, setBusy] = useState("");
+        const [msg, setMsg] = useState("");
+        const [err, setErr] = useState(null);
+        const [run, setRun] = useState(null);
+        const [filter, setFilter] = useState("");
+        const off = new Date().getTimezoneOffset() / 60;              // local -> UTC hours
+        const toUtc = (h, d) => { const x = h + off; return { hour: ((x % 24) + 24) % 24, day: ((d + Math.floor(x / 24)) % 7 + 7) % 7 }; };
+        const toLocal = (h, d) => { const x = h - off; return { hour: ((x % 24) + 24) % 24, day: ((d + Math.floor(x / 24)) % 7 + 7) % 7 }; };
+        const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+        const load = async () => {
+          setErr(null);
+          try {
+            const [t, l] = await Promise.all([api({ action: "db_types" }), api({ action: "db_list" })]);
+            setTypes(t.types || []); setList(l.connections || []);
+          } catch (e) { setErr(e); setList([]); }
+        };
+        useEffect(() => { setSel(null); setTabs(null); setForm(null); setRun(null); setMsg(""); load(); }, [client]);
+        const typeOf = (id) => types.find((t) => t.id === id) || {};
+        const save = async () => {
+          setBusy("save"); setErr(null); setMsg("");
+          try {
+            const body = { action: "db_save", ...form, port: form.port ? Number(form.port) : undefined };
+            if (!form.password) delete body.password;
+            const r = await api(body);
+            const id = r.connection.id;
+            try { const t = await api({ action: "db_test", id }); setMsg("Saved. Connected: " + t.tables + " table(s) and " + t.views + " view(s) found."); }
+            catch (e) { setErr(e); setMsg("Saved, but the test connection failed (see below). Check the details and press Save again."); }
+            setForm(null); await load();
+          } catch (e) { setErr(e); } finally { setBusy(""); }
+        };
+        const openTables = async (c) => {
+          setBusy("tables"); setErr(null); setMsg(""); setRun(null);
+          try {
+            const r = await api({ action: "db_tables", id: c.id });
+            const p = {}, ic = {};
+            (r.tables || []).forEach((x) => { if (x.selected) p[x.key] = true; if (x.incremental_on) ic[x.key] = true; });
+            setSel(r.connection); setTabs(r.tables || []); setPick(p); setIncr(ic); setRowLimit(r.connection.row_limit || 1000000);
+            const s = r.connection.schedule || { every: "off", hour: 2, day: 0 }; const l = toLocal(s.hour, s.day);
+            setSched({ every: s.every, hour: l.hour, day: l.day });
+          } catch (e) { setErr(e); } finally { setBusy(""); }
+        };
+        const saveSel = async () => {
+          const u = toUtc(Number(sched.hour), Number(sched.day));
+          return api({ action: "db_select", id: sel.id, tables: Object.keys(pick).filter((k) => pick[k]), incremental: incr, row_limit: Number(rowLimit), schedule: { every: sched.every, hour: u.hour, day: u.day } });
+        };
+        const keepSel = async () => { setBusy("sel"); setErr(null); try { await saveSel(); setMsg("Saved. " + (sched.every === "off" ? "No schedule: use Extract now when you want fresh data." : "SAMM will refresh this " + sched.every + ".")); await load(); } catch (e) { setErr(e); } finally { setBusy(""); } };
+        const extract = async () => {
+          setBusy("run"); setErr(null); setMsg("");
+          try {
+            await saveSel();
+            const batch = "d" + Date.now().toString(36);
+            const r = await api({ action: "db_run", id: sel.id, to_reports: toReports, batch });
+            setRun({ id: r.run, batch, name: sel.name, toReports, tables: r.tables.map((t) => ({ ...t, status: "queued" })), finished: false });
+          } catch (e) { setErr(e); setBusy(""); }
+        };
+        useEffect(() => {
+          if (!run || run.finished || !run.id) return undefined;
+          let stop = false;
+          const tick = async () => {
+            try {
+              const r = await api({ action: "db_status", run: run.id });
+              if (stop) return;
+              if (r.finished) {
+                setRun((p) => ({ ...p, tables: r.tables, finished: true })); setBusy("");
+                const jobs = r.tables.filter((x) => x.job_id);
+                if (jobs.length) onJobs({ client, batch: run.batch, name: run.name, toReports: run.toReports, tables: jobs });
+              } else setRun((p) => ({ ...p, tables: r.tables }));
+            } catch (e) { if (!stop) { setErr(e); setBusy(""); setRun((p) => ({ ...p, finished: true })); } }
+          };
+          const t = setInterval(tick, 3000); tick();
+          return () => { stop = true; clearInterval(t); };
+        }, [run && run.id]);
+        const remove = async (c) => {
+          if (!window.confirm("Remove the connection '" + c.name + "'? The data already loaded stays; the saved password is deleted.")) return;
+          try { await api({ action: "db_delete", id: c.id }); if (sel && sel.id === c.id) { setSel(null); setTabs(null); } await load(); } catch (e) { setErr(e); }
+        };
+        const field = "bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-white text-xs";
+        const shown = (tabs || []).filter((x) => !filter || x.key.toLowerCase().includes(filter.toLowerCase()));
+        const nSel = Object.keys(pick).filter((k) => pick[k]).length;
+        const stLabel = { queued: "Waiting", running: "Reading rows...", done: "Loaded", partial: "Loaded (stopped at the row limit)", unchanged: "Same as last time", no_changes: "No changes", empty: "Empty table", error: "Failed" };
+        return (
+          <div data-testid="db-panel" className="border border-[#3D3D3D] rounded-xl p-4 space-y-3 bg-[#1E1E1E] text-xs">
+            <div className="text-sm font-semibold text-white">Connect to a database for {clientName || client || "this client"}</div>
+            <div className="text-[#A0A0A0]">SAMM reads the tables straight from the database and brings them through Bronze, Silver and Gold like any other data. The password is kept in a secure vault, never in this screen or in SAMM's files. SAMM only reads; it never writes to your database.</div>
+            <ErrBox err={err} />
+            {msg && <div data-testid="db-msg" className="text-green-300">{msg}</div>}
+            {list === null && <div className="text-[#A0A0A0]">Loading...</div>}
+            {list && list.length === 0 && !form && <div data-testid="db-empty" className="text-[#808080]">No database connections yet for this client.</div>}
+            {(list || []).map((c) => (
+              <div key={c.id} data-testid="db-conn" className="flex flex-wrap items-center gap-2 border border-[#2D2D2D] rounded-lg px-3 py-2">
+                <b className="text-white">{c.name}</b>
+                <span className="text-[#808080]">{(typeOf(c.type).label || c.type)} · {c.host}:{c.port} · {c.database}</span>
+                <span className="text-[#808080]">{c.schedule && c.schedule.every !== "off" ? "refreshes " + c.schedule.every : "on demand"}{c.last_run ? " · last run " + String(c.last_run).replace("T", " ").slice(0, 16) + " UTC" : ""}</span>
+                <span className="flex-1" />
+                <button data-testid="db-open" onClick={() => openTables(c)} disabled={!!busy} className="bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-bold px-3 py-1 rounded">Choose tables / Extract</button>
+                <button data-testid="db-edit" onClick={() => { setForm({ ...blank, ...c, password: "" }); setMsg(""); setErr(null); }} className="underline text-[#A0A0A0] hover:text-white">Edit</button>
+                <button data-testid="db-delete" onClick={() => remove(c)} className="underline text-[#A0A0A0] hover:text-white">Remove</button>
+              </div>
+            ))}
+            {!form && <button data-testid="db-add" onClick={() => { setForm({ ...blank, port: "" }); setMsg(""); setErr(null); }} className="border border-[#3D3D3D] hover:border-amber-500 text-white px-3 py-2 rounded-lg">+ Add a database connection</button>}
+            {form && (
+              <div data-testid="db-form" className="space-y-2 border border-[#2D2D2D] rounded-lg p-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <label className="flex flex-col gap-1 text-[#C0C0C0]">Type
+                    <select data-testid="db-type" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value, port: "" })} className={field}>
+                      {(types.length ? types : [{ id: "sqlserver", label: "SQL Server", available: true }]).map((t) => <option key={t.id} value={t.id}>{t.label}{t.available === false ? " (driver not installed)" : ""}</option>)}
+                    </select></label>
+                  <label className="flex flex-col gap-1 text-[#C0C0C0]">Connection name
+                    <input data-testid="db-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Finance system" className={field} /></label>
+                  <label className="flex flex-col gap-1 text-[#C0C0C0]">Server address
+                    <input data-testid="db-host" value={form.host} onChange={(e) => setForm({ ...form, host: e.target.value })} placeholder="e.g. db.example.com" className={field} /></label>
+                  <label className="flex flex-col gap-1 text-[#C0C0C0]">Port
+                    <input data-testid="db-port" value={form.port} onChange={(e) => setForm({ ...form, port: e.target.value.replace(/\D/g, "") })} placeholder={String(typeOf(form.type).port || "")} className={field} /></label>
+                  <label className="flex flex-col gap-1 text-[#C0C0C0]">Database name
+                    <input data-testid="db-database" value={form.database} onChange={(e) => setForm({ ...form, database: e.target.value })} className={field} /></label>
+                  <label className="flex flex-col gap-1 text-[#C0C0C0]">User name (a read-only user is best)
+                    <input data-testid="db-user" value={form.user} onChange={(e) => setForm({ ...form, user: e.target.value })} autoComplete="off" className={field} /></label>
+                  <label className="flex flex-col gap-1 text-[#C0C0C0]">Password {form.id ? "(leave empty to keep the saved one)" : ""}
+                    <input data-testid="db-password" type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} autoComplete="new-password" className={field} /></label>
+                </div>
+                <div className="flex flex-wrap gap-4 text-[#C0C0C0]">
+                  <label className="flex items-center gap-2"><input data-testid="db-encrypt" type="checkbox" checked={form.encrypt} onChange={(e) => setForm({ ...form, encrypt: e.target.checked })} /> Encrypt the connection (recommended)</label>
+                  <label className="flex items-center gap-2"><input data-testid="db-verify" type="checkbox" checked={form.verify_cert} onChange={(e) => setForm({ ...form, verify_cert: e.target.checked })} /> Check the server's certificate</label>
+                </div>
+                <div className="flex gap-2">
+                  <button data-testid="db-save" onClick={save} disabled={!!busy || !form.name || !form.host || !form.database || !form.user || (!form.id && !form.password)} className="bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-bold text-sm px-4 py-2 rounded-lg">{busy === "save" ? "Connecting..." : "Save and test"}</button>
+                  <button onClick={() => { setForm(null); setErr(null); }} className="border border-[#3D3D3D] text-white text-sm px-4 py-2 rounded-lg">Cancel</button>
+                </div>
+              </div>
+            )}
+            {sel && tabs && (
+              <div data-testid="db-tables" className="space-y-2 border border-[#2D2D2D] rounded-lg p-3">
+                <div className="text-white font-semibold">{sel.name}: which tables?</div>
+                <div className="flex flex-wrap items-center gap-3 text-[#C0C0C0]">
+                  <button data-testid="db-all" onClick={() => { const p = {}; tabs.forEach((x) => { if (x.readable && x.kind === "table") p[x.key] = true; }); setPick(p); }} className="underline">All tables</button>
+                  <button data-testid="db-none" onClick={() => setPick({})} className="underline">None</button>
+                  <input data-testid="db-filter" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Find a table" className={field + " w-44"} />
+                  <span data-testid="db-count" className="text-[#808080]">{nSel} of {tabs.length} ticked</span>
+                </div>
+                <div className="max-h-64 overflow-auto border border-[#2D2D2D] rounded">
+                  {shown.map((x) => (
+                    <div key={x.key} data-testid="db-table-row" className="flex flex-wrap items-center gap-2 px-2 py-1 border-b border-[#262626]">
+                      <input data-testid="db-table-pick" type="checkbox" disabled={!x.readable} checked={!!pick[x.key]} onChange={(e) => setPick({ ...pick, [x.key]: e.target.checked })} />
+                      <span className="text-white font-mono">{x.key}</span>
+                      <span className="text-[#808080]">{x.kind === "view" ? "view · " : ""}{x.rows != null ? Number(x.rows).toLocaleString() + " rows · " : ""}{x.columns} columns{x.left_out ? " (" + x.left_out + " skipped: not data)" : ""}</span>
+                      <span className="flex-1" />
+                      {x.incremental && (
+                        <label className="flex items-center gap-1 text-[#C0C0C0]" title={"After the first full load, only rows where " + x.incremental.column + " is newer are read, and they " + (x.incremental.kind === "new" ? "are added to the dataset (edits to old rows are not seen)." : "update the dataset.")}>
+                          <input data-testid="db-incr" type="checkbox" checked={!!incr[x.key]} onChange={(e) => setIncr({ ...incr, [x.key]: e.target.checked })} /> {x.incremental.kind === "new" ? "only new rows" : "only changed rows"} ({x.incremental.column})
+                        </label>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <div className="flex flex-wrap items-center gap-3 text-[#C0C0C0]">
+                  <label className="flex items-center gap-2">Refresh
+                    <select data-testid="db-every" value={sched.every} onChange={(e) => setSched({ ...sched, every: e.target.value })} className={field}>
+                      <option value="off">only when I press Extract now</option><option value="hourly">every hour</option><option value="daily">every day</option><option value="weekly">every week</option>
+                    </select></label>
+                  {(sched.every === "daily" || sched.every === "weekly") && (
+                    <label className="flex items-center gap-2">at
+                      <select data-testid="db-hour" value={sched.hour} onChange={(e) => setSched({ ...sched, hour: Number(e.target.value) })} className={field}>
+                        {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{String(h).padStart(2, "0")}:00</option>)}
+                      </select> your time</label>
+                  )}
+                  {sched.every === "weekly" && (
+                    <label className="flex items-center gap-2">on
+                      <select data-testid="db-day" value={sched.day} onChange={(e) => setSched({ ...sched, day: Number(e.target.value) })} className={field}>
+                        {DAYS.map((d, n) => <option key={d} value={n}>{d}</option>)}
+                      </select></label>
+                  )}
+                  <label className="flex items-center gap-2">Row limit per table
+                    <input data-testid="db-limit" value={rowLimit} onChange={(e) => setRowLimit(e.target.value.replace(/\D/g, ""))} className={field + " w-28"} /></label>
+                </div>
+                <label className="flex items-center gap-2 text-[#C0C0C0]"><input data-testid="db-to-reports" type="checkbox" checked={toReports} onChange={(e) => setToReports(e.target.checked)} /> Run all the way to reports (also keeps scheduled refreshes up to date)</label>
+                <div className="flex flex-wrap gap-2">
+                  <button data-testid="db-extract" onClick={extract} disabled={!!busy || nSel === 0} className="bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-bold text-sm px-4 py-2 rounded-lg">{busy === "run" ? "Extracting..." : "Extract " + nSel + " table" + (nSel === 1 ? "" : "s") + " now"}</button>
+                  <button data-testid="db-keep" onClick={keepSel} disabled={!!busy} className="border border-[#3D3D3D] hover:border-amber-500 text-white text-sm px-4 py-2 rounded-lg">Save choices only</button>
+                  <button onClick={() => { setSel(null); setTabs(null); }} className="border border-[#3D3D3D] text-white text-sm px-4 py-2 rounded-lg">Close</button>
+                </div>
+              </div>
+            )}
+            {run && (
+              <div data-testid="db-run" className="space-y-1 border border-[#2D5A3D] bg-[#10241A] rounded-lg p-3">
+                <div className="text-green-300 font-semibold">{run.finished ? "Extraction finished" : "Extracting..."} · {run.tables.filter((x) => !["queued", "running"].includes(x.status)).length} of {run.tables.length} tables</div>
+                {run.tables.map((x) => (
+                  <div key={x.key} data-testid="db-run-row" className="flex flex-wrap gap-2 text-[#C0C0C0]">
+                    <span className="font-mono text-white">{x.key}</span><span className={x.status === "error" ? "text-red-300" : ""}>{stLabel[x.status] || x.status}{x.rows != null ? " · " + Number(x.rows).toLocaleString() + " rows" : ""}{x.error ? ": " + x.error : ""}{x.note ? " · " + x.note : ""}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      }
+
       function OnboardingHub({ session, onAsk, onViewsChanged, clients, clientNames, acting }) {
         const [items, setItems] = useState([]);
         const [over, setOver] = useState(false);
@@ -2717,6 +2927,18 @@
           if (toReports) setRuns((p) => [{ id: batch, client: folder.client, folder: folder.name, total: ids.length, status: "running", msg: "", reports: [], failed: 0 }, ...p]);
           setFolder(null);
         };
+        const [method, setMethod] = useState("files");
+        const addDbJobs = async ({ client, batch, name, toReports: tr, tables }) => {
+          const a = apiFor(client); const ids = [];
+          for (const t of tables) {
+            let job = null;
+            try { const r = await a({ action: "job_get", id: t.job_id }); job = r && r.job; } catch (_) { /* the card is skipped */ }
+            if (!job) continue;
+            const id = "f" + ++seq.current; ids.push(id);
+            setItems((p) => [{ id, client, batch: tr ? batch : undefined, name: t.table + " (from " + name + ")", size: 0, stage: "silver", msg: "", datasets: {}, order: [], error: null, done: false, job }, ...p]);
+          }
+          if (tr && ids.length) setRuns((p) => [{ id: batch, client, folder: name, kind: "db", total: ids.length, status: "running", msg: "", reports: [], failed: 0 }, ...p]);
+        };
         const finishRun = async (run) => {
           const a = apiFor(run.client);
           const say = (m) => setRuns((p) => p.map((r) => (r.id === run.id ? { ...r, msg: m } : r)));
@@ -2803,6 +3025,14 @@
                   </select>
                 </label>
               )}
+              <div data-testid="method-picker" className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="text-[#A0A0A0]">Bring data in from:</span>
+                {[["files", "📄 Files or a folder"], ["db", "🗄 A database"]].map(([id, label]) => (
+                  <button key={id} data-testid={"method-" + id} aria-pressed={method === id} onClick={() => setMethod(id)} className={"px-3 py-1.5 rounded-lg font-semibold border " + (method === id ? "border-amber-500 bg-amber-500/10 text-amber-300" : "border-[#3D3D3D] text-[#C0C0C0] hover:border-amber-500")}>{label}</button>
+                ))}
+              </div>
+              {method === "db" && <DbPanel client={nowClient()} clientName={(clientNames || {})[nowClient()]} apiFor={apiFor} onJobs={addDbJobs} />}
+              {method === "files" && (<>
               <label
                 htmlFor="onb-file"
                 onDragOver={(e) => { e.preventDefault(); setOver(true); }}
@@ -2858,6 +3088,7 @@
                   <button data-testid="staged-go" onClick={startStaged} className="bg-amber-600 hover:bg-amber-500 text-white font-bold text-sm px-4 py-2 rounded-lg">Upload {staged.length} file{staged.length === 1 ? "" : "s"}</button>
                 </div>
               )}
+              </>)}
               <details className="text-xs"><summary data-testid="more-options" className="cursor-pointer text-[#A0A0A0] hover:text-white">More options</summary><div className="flex flex-wrap items-center gap-3 mt-2">
                 <button onClick={runPipeline} disabled={pipe.busy} className="border border-[#3D3D3D] hover:border-amber-500 text-xs text-white px-3 py-2 rounded-lg disabled:opacity-50">▶ Process files already uploaded</button>
                 <button onClick={() => checkNew(false)} disabled={pipe.busy} className="border border-[#3D3D3D] hover:border-amber-500 text-xs text-white px-3 py-2 rounded-lg disabled:opacity-50">🔎 Check for new datasets</button>
@@ -2888,8 +3119,8 @@
               const fin = mine.filter((i) => i.error || i.done || (i.job && ["done", "failed"].includes(i.job.status))).length;
               return (
                 <div key={r.id} data-testid="folder-run" className="border border-[#2D5A3D] bg-[#10241A] rounded-xl p-4 space-y-2 text-xs">
-                  <div className="text-green-300 font-semibold">Folder "{r.folder}" for {(clientNames || {})[r.client] || r.client}: {r.status === "done" ? "finished" : r.status === "failed" ? "stopped" : "running"}</div>
-                  {r.status !== "done" && r.status !== "failed" && <div data-testid="folder-progress" className="text-[#C0C0C0]">{r.status === "running" ? fin + " of " + r.total + " files processed" : (r.msg || "Finishing...")}</div>}
+                  <div className="text-green-300 font-semibold">{r.kind === "db" ? "Database" : "Folder"} "{r.folder}" for {(clientNames || {})[r.client] || r.client}: {r.status === "done" ? "finished" : r.status === "failed" ? "stopped" : "running"}</div>
+                  {r.status !== "done" && r.status !== "failed" && <div data-testid="folder-progress" className="text-[#C0C0C0]">{r.status === "running" ? fin + " of " + r.total + (r.kind === "db" ? " tables processed" : " files processed") : (r.msg || "Finishing...")}</div>}
                   {r.status === "done" && (
                     <div className="space-y-2">
                       <div className="text-[#C0C0C0]">{r.reports.filter((x) => x.id).length} report(s) published{r.failed ? "; " + r.failed + " file(s) failed (open them below and press Retry)" : ""}{r.reports.some((x) => x.error) ? "; " + r.reports.filter((x) => x.error).length + " could not be published" : ""}.</div>
@@ -3643,7 +3874,7 @@
                   <div className="text-xs font-mono space-y-1">
                     <div data-testid="who-role" className="text-white">{ROLE_LABELS[identity.role] || identity.role}</div>
                     <div className="text-[#A0A0A0] truncate" title={identity.email}>{identity.email}</div>
-                    <div data-testid="who-version" className="text-[#707070]">Server {identity.version || "older than v34 - redeploy the backend"} · Screen v34b</div>
+                    <div data-testid="who-version" className="text-[#707070]">Server {identity.version || "older than v35 - redeploy the backend"} · Screen v35</div>
                     <button onClick={onSignOut} className="mt-2 text-[#A0A0A0] hover:text-white underline">Sign out</button>
                   </div>
                 )}
