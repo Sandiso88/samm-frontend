@@ -2790,7 +2790,7 @@
                 <p className="text-xs text-[#A0A0A0] mt-1">Drop a file and SAMM keeps the original (Bronze), turns it into rows and columns (Silver), suggests how its columns match your standard names, and builds a view you can ask questions about (Gold). csv, tsv, json, jsonl, txt and Excel are structured; other formats are archived untouched.</p>
               </div>
               <div data-testid="onb-tabs" role="tablist" className="flex flex-wrap gap-2 border-b border-[#2D2D2D] pb-3">
-                {[["upload", "⬆ Upload", "Drop a file and watch it move through"], ["bronze", "Bronze", "The original files, exactly as uploaded"], ["silver", "Silver", "Converted tables"], ["gold", "Gold views", "Ready to use: ask questions, publish reports"], ["links", "Links & drill-down", "Tables that belong together"], ["tools", "Tools", "Teach SAMM and self-test"]].map(([id, label, tip]) => (
+                {[["upload", "⬆ Upload", "Drop a file and watch it move through"], ["bronze", "Bronze", "The original files, exactly as uploaded"], ["silver", "Silver", "Converted tables"], ["links", "Links & drill-down", "Tables that belong together"], ["gold", "Gold views", "Ready to use: ask questions, publish reports"], ["tools", "Tools", "Teach SAMM and self-test"]].map(([id, label, tip]) => (
                   <button key={id} role="tab" aria-selected={tab === id} title={tip} data-testid={"onb-tab-" + id} onClick={() => { setTab(id); if (id === "bronze" && !history.open) loadHistory(history.limit); }}
                     className={"px-3 py-1.5 rounded-lg text-xs font-semibold border transition " + (tab === id ? "border-amber-500 bg-amber-500/10 text-amber-300" : "border-[#3D3D3D] text-[#C0C0C0] hover:border-amber-600 hover:text-white")}>{label}</button>
                 ))}
@@ -3643,7 +3643,7 @@
                   <div className="text-xs font-mono space-y-1">
                     <div data-testid="who-role" className="text-white">{ROLE_LABELS[identity.role] || identity.role}</div>
                     <div className="text-[#A0A0A0] truncate" title={identity.email}>{identity.email}</div>
-                    <div data-testid="who-version" className="text-[#707070]">Server {identity.version || "older than v34 - redeploy the backend"} · Screen v34</div>
+                    <div data-testid="who-version" className="text-[#707070]">Server {identity.version || "older than v34 - redeploy the backend"} · Screen v34b</div>
                     <button onClick={onSignOut} className="mt-2 text-[#A0A0A0] hover:text-white underline">Sign out</button>
                   </div>
                 )}
