@@ -1495,7 +1495,7 @@
                 <div>Report viewers see only the reports you tick. Each change is e-mailed to them.</div>
                 {err && <div data-testid="share-error" className="text-red-300">{err}</div>}
                 {msg && <div data-testid="share-msg" className="text-[#8ef4b2]">{msg}</div>}
-                {d && people.length === 0 && <div className="text-[#78869b]">No report viewers yet. An administrator invites them in Admin, or type an e-mail below.</div>}
+                {d && people.length === 0 && <div className="text-[#78869b]">No report viewers yet. An administrator invites them in Authorizations, or type an e-mail below.</div>}
                 {d && people.map((p) => {
                   const have = (d.access[p] || []);
                   const on = have.includes(reportId);
@@ -1550,7 +1550,7 @@
           setBusy(true); setErr("");
           try {
             const r = await api({ action: "dataset_remove", dataset, apply: true, confirm: typed.trim() });
-            setRem(null); window.dispatchEvent(new CustomEvent("samm-titles-changed")); window.dispatchEvent(new CustomEvent("samm-datasets-changed", { detail: { msg: "Removed " + friendlyDs(dataset) + ". The uploaded original file was not touched." } }));
+            setRem(null); window.dispatchEvent(new CustomEvent("samm-titles-changed")); window.dispatchEvent(new CustomEvent("samm-notice", { detail: { kind: "removed", msg: "Removed " + friendlyDs(dataset) + " from Silver and Gold. The uploaded original file was not touched." } })); window.dispatchEvent(new CustomEvent("samm-datasets-changed", { detail: {} }));
           } catch (e) { setErr(e.message || "Could not remove."); } finally { setBusy(false); }
         };
         const apply = async () => {
@@ -1703,6 +1703,34 @@
           ? <div data-testid="job-heading" className="text-sm font-mono truncate" title={file}><span className="text-white font-semibold">{name}</span> <span className="text-[#808080]">({file})</span></div>
           : <div data-testid="job-heading" className="text-sm text-white font-mono truncate">{file}</div>;
       }
+      // v36c: a bar that stays until dismissed after something is deleted (Bronze offers Restore)
+      function NoticeBar({ session }) {
+        const [n, setN] = useState(null);
+        const [busy, setBusy] = useState(false);
+        useEffect(() => {
+          const on = (e) => { if (e && e.detail && e.detail.msg) setN({ ...e.detail, ts: Date.now() }); };
+          window.addEventListener("samm-notice", on);
+          return () => window.removeEventListener("samm-notice", on);
+        }, []);
+        if (!n) return null;
+        const restore = async () => {
+          setBusy(true);
+          try {
+            await callBackend(session.url, session.token, { action: "bronze_restore", id: n.hold, ...(n.client ? { client: n.client } : {}) });
+            window.dispatchEvent(new CustomEvent("samm-bronze-deleted"));
+            window.dispatchEvent(new CustomEvent("samm-datasets-changed", { detail: {} }));
+            setN({ msg: "Restored " + (n.file || "the upload") + ". SAMM is rebuilding Silver and Gold; reports that were deleted are not brought back.", kind: "restored" });
+          } catch (e) { setN({ ...n, err: (e && e.message) || "Could not restore." }); } finally { setBusy(false); }
+        };
+        return (
+          <div data-testid="notice-bar" role="status" className="flex flex-wrap items-center gap-3 text-xs bg-[#10241A] border border-green-800 rounded-lg px-4 py-2 text-green-300">
+            <span className="flex-1 min-w-[200px]">✓ <span data-testid="notice-text">{n.msg}</span>{n.err && <span className="text-red-300"> {n.err}</span>}</span>
+            {n.hold && n.kind === "deleted" && <button data-testid="notice-restore" disabled={busy} onClick={restore} className="border border-green-700 hover:border-amber-500 text-white px-3 py-1 rounded-md disabled:opacity-50">{busy ? "Restoring..." : "Restore"}</button>}
+            <button data-testid="notice-dismiss" onClick={() => setN(null)} className="underline text-[#A0A0A0] hover:text-white">Dismiss</button>
+          </div>
+        );
+      }
+
       // v36: delete an upload and everything built from it; the raw file waits 30 days in a hidden area
       function BronzeDelete({ api, job, onGone }) {
         const [open, setOpen] = useState(false);
@@ -1718,7 +1746,10 @@
             const r = await api({ action: "bronze_delete", job: job.id, apply: true, confirm: typed.trim() });
             setDone(r); setOpen(false); setPlan(null);
             window.dispatchEvent(new CustomEvent("samm-titles-changed"));
-            window.dispatchEvent(new CustomEvent("samm-datasets-changed", { detail: { msg: "Deleted " + job.file + " and everything built from it. The original file is kept for " + ((r.hold && r.hold.days) || 30) + " days: use Restore under Recently deleted." } }));
+            const rm = r.removed || {};
+            const bits = [[rm.views, "Gold view(s)"], [rm.reports, "report(s)"], [rm.links, "link(s)"], [rm.drill_downs, "drill-down(s)"]].filter(([k]) => k).map(([k, l]) => k + " " + l);
+            window.dispatchEvent(new CustomEvent("samm-notice", { detail: { kind: "deleted", file: job.file, hold: r.hold && r.hold.id, client: api.__client, msg: "Deleted " + job.file + " and everything built from it" + (bits.length ? ": " + bits.join(", ") : "") + ". The original file is kept for " + ((r.hold && r.hold.days) || 30) + " days." } }));
+            window.dispatchEvent(new CustomEvent("samm-datasets-changed", { detail: {} }));
             window.dispatchEvent(new CustomEvent("samm-bronze-deleted"));
             onGone && onGone();
           } catch (e) { setErr(e.message || "Could not delete."); } finally { setBusy(false); }
@@ -2068,7 +2099,7 @@
         const check = async () => { setOpen(true); setBusy(true); setErr(""); setTyped(""); try { setPlan((await api({ action: "gold_remove", dataset })).plan); } catch (e) { setErr(e.message || "Could not check."); } finally { setBusy(false); } };
         const go = async () => {
           setBusy(true); setErr("");
-          try { await api({ action: "gold_remove", dataset, apply: true, confirm: typed.trim() }); setOpen(false); setPlan(null); window.dispatchEvent(new CustomEvent("samm-titles-changed")); window.dispatchEvent(new CustomEvent("samm-datasets-changed", { detail: { msg: "Removed the Gold view of " + friendlyDs(dataset) + ". The Silver table is untouched." } })); if (onDone) onDone(); }
+          try { await api({ action: "gold_remove", dataset, apply: true, confirm: typed.trim() }); setOpen(false); setPlan(null); window.dispatchEvent(new CustomEvent("samm-titles-changed")); window.dispatchEvent(new CustomEvent("samm-notice", { detail: { kind: "removed", msg: "Removed the Gold view of " + friendlyDs(dataset) + ". The Silver table is untouched." } })); window.dispatchEvent(new CustomEvent("samm-datasets-changed", { detail: {} })); if (onDone) onDone(); }
           catch (e) { setErr(e.message || "Could not remove."); } finally { setBusy(false); }
         };
         const bt = "border border-[#3D3D3D] hover:border-amber-500 text-white text-xs px-3 py-1 rounded-md disabled:opacity-50";
@@ -2895,7 +2926,7 @@
         const [target, setTarget] = useState("");
         const nowClient = () => target || acting || window.__sammClient || window.__sammHome || undefined;
         // Each upload is tied to the client it was started under, so switching client never breaks a running job.
-        const apiFor = (client) => (payload) => callBackend(session.url, session.token, client ? { ...payload, client } : payload);
+        const apiFor = (client) => { const f = (payload) => callBackend(session.url, session.token, client ? { ...payload, client } : payload); f.__client = client; return f; };
         const upd = (id, patch) => setItems((p) => p.map((i) => (i.id === id ? { ...i, ...patch } : i)));
         const updDs = (id, ds, patch) =>
           setItems((p) => p.map((i) => (i.id === id ? { ...i, datasets: { ...i.datasets, [ds]: { ...i.datasets[ds], ...patch } } } : i)));
@@ -3448,7 +3479,7 @@
         return (
           <div data-testid="governance-hub" className="max-w-3xl mx-auto space-y-5">
             <div className="bg-[#222222] border border-[#2D2D2D] rounded-xl p-6 shadow-xl space-y-3">
-              <h2 className="text-lg font-bold text-white">🛡️ Governance</h2>
+              <h2 className="text-lg font-bold text-white">🛡️ Authorizations</h2>
               <p className="text-xs text-[#A0A0A0] leading-relaxed">
                 {isSys ? "You manage every client." : "You manage the users and policy of client " + identity.tenant_id + "."} Tokens are shown once and only a hash is stored. The server checks your role on every call.
               </p>
@@ -3937,7 +3968,7 @@
                     title={canGovern ? "" : "Requires a Client or System Administrator"}
                     className={navClass("governance", !canGovern)}
                   >
-                    <span>🛡️ Admin</span>
+                    <span>🛡️ Authorizations</span>
                   </button>}
                 </nav>
               </div>
@@ -4001,6 +4032,7 @@
               </header>
 
               <div className="flex-1 overflow-y-auto p-6 space-y-4">
+                {!demo && <NoticeBar session={session} />}
                 {activeTab === "chat" && (
                   <div className="max-w-4xl mx-auto space-y-6">
                     {messages.map((msg) => (
@@ -4124,7 +4156,7 @@
                 {activeTab === "governance" && (
                   demo ? (
                     <div className="max-w-2xl mx-auto bg-[#222222] border border-[#2D2D2D] rounded-xl p-6 shadow-xl space-y-3">
-                      <h2 className="text-lg font-bold text-white">🛡️ Governance</h2>
+                      <h2 className="text-lg font-bold text-white">🛡️ Authorizations</h2>
                       <SimBadge>Demo mode: sign in with an administrator token to manage users and policy</SimBadge>
                     </div>
                   ) : (
