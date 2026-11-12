@@ -2241,9 +2241,9 @@
       }
 
       // v25: links between one client's tables are found and checked automatically; only strong, clean ones are approved without a person.
-      async function autoLinkRun(api, say, dataset) {
+      async function autoLinkRun(api, say, dataset, scoped) {
         say("Looking for links between this client's tables...");
-        const r = await api({ action: "links_suggest", ...(dataset ? { dataset } : {}) });
+        const r = await api({ action: "links_suggest", ...(dataset ? { dataset } : {}), ...(scoped ? { scoped: true } : {}) });
         const all = r.candidates.filter((c) => c.status === "new");
         const todo = all.slice(0, 12);
         let approved = 0, review = 0;
@@ -2287,6 +2287,28 @@
         const [showWeak, setShowWeak] = useState(false);
         const [model, setModel] = useState(null);      // suggestions: combine same-shape files, build shared lists
         const [mnote, setMnote] = useState("");
+        const [scope, setScope] = useState(null);       // v37: which tables take part in automatic linking
+        const [showBad, setShowBad] = useState(false);
+        const [man, setMan] = useState({ a: "", ac: "", b: "", bc: "", busy: false, note: "" });
+        const loadScope = async () => { try { const r = await api({ action: "links_scope_get" }); setScope(r && Array.isArray(r.tables) ? { ...r, selected: Array.isArray(r.selected) ? r.selected : [] } : null); } catch (e) { setErr(e); } };
+        const setTicks = async (list) => {
+          setScope((sc) => sc ? { ...sc, selected: list, tables: sc.tables.map((t) => ({ ...t, selected: list.includes(t.dataset) })) } : sc);
+          try { await api({ action: "links_scope_set", datasets: list }); } catch (e) { setErr(e); await loadScope(); }
+        };
+        const ticked = scope ? scope.selected : [];
+        const manualCheck = async () => {
+          setMan((m) => ({ ...m, busy: true, note: "" })); setErr(null);
+          try {
+            const A = { dataset: man.a, column: man.ac }, B = { dataset: man.b, column: man.bc };
+            const r = await api({ action: "links_check", a: A, b: B });
+            const l = r.link;
+            setData((d) => {
+              const row = { id: l.id, a: l.a, b: l.b, status: l.status, stats: l.stats, orphan_sample: l.orphan_sample, a_label: label(l.a.dataset), b_label: label(l.b.dataset) };
+              return { ...d, candidates: d.candidates.some((c) => c.id === l.id) ? d.candidates.map((c) => (c.id === l.id ? { ...c, ...row } : c)) : [row, ...d.candidates], links: (d.links || []).filter((x) => x.id !== l.id).concat([l]) };
+            });
+            setMan((m) => ({ ...m, busy: false, note: l.stats.usable ? "Checked: " + Math.round((l.stats.match || 0) * 100) + "% of the values match (" + l.stats.relation + "). Approve it in the list below." : "Checked, but it cannot be used: " + (l.stats.relation === "many-to-many" ? "both columns repeat values, so joining would multiply rows." : "no values match.") }));
+          } catch (e) { setErr(e); setMan((m) => ({ ...m, busy: false })); }
+        };
         const loadModel = async () => { try { const r = await api({ action: "model_suggest" }); setModel(r && Array.isArray(r.combine) && Array.isArray(r.dimensions) ? { ...r, duplicates: Array.isArray(r.duplicates) ? r.duplicates : [] } : null); } catch (e) { setModel(null); } };
         const carriedText = (c) => {
           if (!c) return "";
@@ -2305,7 +2327,7 @@
             await loadModel(); await load();
           } catch (e) { setErr(e); } finally { setBusy(""); }
         };
-        const label = (ds) => ((data && data.labels && data.labels[ds]) || String(ds).replace(/^silver_/, ""));
+        const label = (ds) => ((scope && (scope.tables.find((t) => t.dataset === ds) || {}).label) || (data && data.labels && data.labels[ds]) || String(ds).replace(/^silver_/, ""));
         const load = async () => {
           setBusy("load"); setErr(null);
           try {
@@ -2315,7 +2337,7 @@
             try { const a = await api({ action: "drill_auto" }); hier = a.hierarchies; } catch (_) { /* drill-downs are a bonus here; the links still show */ }
             setData({ ...r, labels, hierarchies: hier || r.hierarchies });
             setDrill((cur) => cur || ((hier || [])[0] || {}).name || "");
-            loadModel();
+            loadModel(); loadScope();
           } catch (e) { setErr(e); } finally { setBusy(""); }
         };
         const merge = (link) => setData((d) => d ? { ...d, candidates: d.candidates.map((c) => c.id === link.id ? { ...c, status: link.status, stats: link.stats, orphan_sample: link.orphan_sample } : c), links: d.links.filter((l) => l.id !== link.id).concat([link]) } : d);
@@ -2376,6 +2398,38 @@
             {open && busy === "load" && <div className="text-xs text-[#A0A0A0]">Looking at the columns...</div>}
             {open && data && (
               <div className="space-y-3">
+                <div data-testid="scope-box" className="border border-[#2D2D2D] rounded-lg p-3 bg-[#1B1B1B] text-xs space-y-2">
+                  <div className="text-white font-semibold">1. Choose the tables to link</div>
+                  <div className="text-[#A0A0A0]">Tick the tables or data sources that belong together. "Link automatically" only looks at the ticked tables. New tables start unticked. Links you have already approved keep working if you untick a table.</div>
+                  {!scope && <div className="text-[#808080]">Loading the tables...</div>}
+                  {scope && scope.tables.length === 0 && <div data-testid="scope-empty" className="text-[#808080]">There are no tables yet. Upload data first.</div>}
+                  {scope && scope.tables.length > 0 && (
+                    <>
+                      <div className="flex flex-wrap items-center gap-3 text-[#C0C0C0]">
+                        <button data-testid="scope-all" onClick={() => setTicks(scope.tables.map((t) => t.dataset))} className="underline">Select all</button>
+                        <button data-testid="scope-none" onClick={() => setTicks([])} className="underline">None</button>
+                        <span data-testid="scope-count" className="text-[#808080]">{ticked.length} of {scope.tables.length} ticked</span>
+                      </div>
+                      {[["main", "Main tables"], ["lookup", "Lookup tables"], ["list", "Shared lists"]].map(([g, title]) => {
+                        const rows = scope.tables.filter((t) => t.group === g);
+                        if (!rows.length) return null;
+                        return (
+                          <div key={g} className="space-y-1">
+                            <div className="text-[#808080] uppercase tracking-wide text-[10px]">{title}</div>
+                            {rows.map((t) => (
+                              <label key={t.dataset} data-testid="scope-row" className="flex flex-wrap items-center gap-2 px-2 py-1 border border-[#262626] rounded cursor-pointer hover:border-[#3D3D3D]">
+                                <input data-testid="scope-tick" type="checkbox" checked={t.selected} onChange={(e) => setTicks(e.target.checked ? ticked.concat([t.dataset]) : ticked.filter((x) => x !== t.dataset))} />
+                                <span className="text-white font-semibold">{t.label}</span>
+                                <span className="text-[#808080]">{t.source === "database" ? "database" : "files"}{t.combined ? " · combined" : ""}{t.links ? " · " + t.links + " approved link(s)" : ""}</span>
+                                {t.new && <span data-testid="scope-new" className="px-1.5 rounded-full border border-amber-600 text-amber-300 text-[10px]">new</span>}
+                              </label>
+                            ))}
+                          </div>
+                        );
+                      })}
+                    </>
+                  )}
+                </div>
                 {model && mnote && <div data-testid="model-note" className="text-xs text-green-300">{mnote}</div>}
                 {(() => {
                   const ok = (data.links || []).filter((l) => l.status === "approved" && l.stats && l.stats.parent && l.stats.relation !== "many-to-many");
@@ -2384,10 +2438,15 @@
                     <div data-testid="model-summary" className="border border-[#2D2D2D] rounded-lg p-3 bg-[#1B1B1B] text-xs space-y-1">
                       <div className="text-white font-semibold">How your tables fit together</div>
                       {ok.length === 0 && <div className="text-[#A0A0A0]">No links are approved yet. When two tables share a code (for example every purchase order row has a property code), SAMM can link them so you can drill down from one to the other. Use "Find links" results below.</div>}
-                      {ok.map((l) => {
-                        const par = l.stats.parent === "a" ? l.a : l.b, ch = l.stats.parent === "a" ? l.b : l.a;
-                        return <div key={l.id} data-testid="plain-link" className="text-[#C0C0C0]">Each row of <b className="text-white">{label(ch.dataset)}</b> belongs to one <b className="text-white">{label(par.dataset)}</b> (matched on <span className="font-mono text-amber-300">{ch.column}</span>).</div>;
-                      })}
+                      {Object.entries(ok.reduce((m, l) => { const ch = l.stats.parent === "a" ? l.b : l.a; (m[ch.dataset] = m[ch.dataset] || []).push(l); return m; }, {})).map(([cds, ls]) => (
+                        <div key={cds} data-testid="table-card" className="border border-[#262626] rounded-md px-3 py-2 mb-1 space-y-0.5">
+                          <div className="text-white font-semibold">{label(cds)}</div>
+                          {ls.map((l) => {
+                            const par = l.stats.parent === "a" ? l.a : l.b, ch = l.stats.parent === "a" ? l.b : l.a;
+                            return <div key={l.id} data-testid="plain-link" className="text-[#C0C0C0]">Each row of <b className="text-white">{label(ch.dataset)}</b> belongs to one <b className="text-white">{label(par.dataset)}</b> (matched on <span className="font-mono text-amber-300">{ch.column}</span>).</div>;
+                          })}
+                        </div>
+                      ))}
                       {hs.length > 0 && <div className="pt-2 flex flex-wrap items-center gap-2" data-testid="drill-tabs"><span className="text-[#808080]">Drill-down tables:</span>
                         {hs.map((h) => <button key={h.name} data-testid="drill-pick" onClick={() => setDrill(drill === h.name ? "" : h.name)} className={"px-2 py-0.5 rounded border " + (drill === h.name ? "border-amber-500 text-amber-300" : "border-[#3D3D3D] text-white")}>{h.name}</button>)}</div>}
                     </div>
@@ -2441,16 +2500,52 @@
                   </div>
                 )}
                 {data.candidates.length === 0 && <div data-testid="links-none" className="text-xs text-[#A0A0A0]">No likely links found. Link finding needs at least two tables with key-like columns such as a code or id.</div>}
-                {data.candidates.length > 0 && (
+                {(
                   <div className="flex flex-wrap items-center gap-3 text-xs">
-                    <button data-testid="links-auto" onClick={async () => { setErr(null); try { const r = await autoLinkRun(api, setProg); await load(); setAutoNote(r.text || "No new links to check."); } catch (e) { setErr(e); setProg(""); } }} disabled={!!prog} className="border border-green-700 text-green-300 hover:bg-green-900/30 px-3 py-1 rounded-md disabled:opacity-50">Link automatically</button>
+                    <button data-testid="links-auto" onClick={async () => { setErr(null); try { const r = await autoLinkRun(api, setProg, undefined, !!scope); await load(); setAutoNote(r.text || "No new links to check among the ticked tables."); } catch (e) { setErr(e); setProg(""); } }} disabled={!!prog || (!!scope && ticked.length < 2)} title={scope && ticked.length < 2 ? "Tick at least two tables first" : ""} className="border border-green-700 text-green-300 hover:bg-green-900/30 px-3 py-1 rounded-md disabled:opacity-50">{scope ? "2. Link automatically (" + ticked.length + " ticked)" : "Link automatically"}</button>
                     <button data-testid="links-check-all" onClick={checkAll} disabled={!!prog || data.candidates.every((c) => c.stats)} className="border border-[#3D3D3D] hover:border-amber-500 text-white px-3 py-1 rounded-md disabled:opacity-50">Check all</button>
                     {prog && <span data-testid="links-progress" className="text-amber-300">{prog}</span>}
                     {!prog && autoNote && <span data-testid="links-auto-note" className="text-green-300">{autoNote}</span>}
                   </div>
                 )}
+                <div data-testid="manual-box" className="border border-[#2D2D2D] rounded-lg p-3 bg-[#1B1B1B] text-xs space-y-2">
+                  <div className="text-white font-semibold">Or link two tables yourself</div>
+                  <div className="text-[#A0A0A0]">Pick a table and column on each side. SAMM checks the real values and tells you if the link can be used. Works on any table, ticked or not.</div>
+                  {scope && (
+                    <div className="flex flex-wrap items-center gap-2">
+                      {[["a", "ac"], ["b", "bc"]].map(([k, ck], i) => {
+                        const tb = scope.tables.find((t) => t.dataset === man[k]);
+                        return (
+                          <span key={k} className="flex items-center gap-1">
+                            {i === 1 && <span className="text-[#78869b] mx-1">↔</span>}
+                            <select data-testid={"man-table-" + k} aria-label={i ? "Second table" : "First table"} value={man[k]} onChange={(e) => setMan({ ...man, [k]: e.target.value, [ck]: "", note: "" })} className="bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-white max-w-[200px]">
+                              <option value="">Table</option>{scope.tables.map((t) => <option key={t.dataset} value={t.dataset}>{t.label}</option>)}
+                            </select>
+                            <select data-testid={"man-col-" + k} aria-label={i ? "Second column" : "First column"} value={man[ck]} onChange={(e) => setMan({ ...man, [ck]: e.target.value, note: "" })} disabled={!tb} className="bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-white font-mono max-w-[180px] disabled:opacity-50">
+                              <option value="">Column</option>{(tb ? tb.columns : []).map((c) => <option key={c} value={c}>{c}</option>)}
+                            </select>
+                          </span>
+                        );
+                      })}
+                      <button data-testid="man-check" onClick={manualCheck} disabled={man.busy || !man.a || !man.b || !man.ac || !man.bc || man.a === man.b} className="border border-[#3D3D3D] hover:border-amber-500 text-white px-3 py-1 rounded-md disabled:opacity-50">{man.busy ? "Checking..." : "Check this link"}</button>
+                    </div>
+                  )}
+                  {man.note && <div data-testid="man-note" className="text-amber-300">{man.note}</div>}
+                </div>
                 {(() => { const w = data.candidates.filter((c) => c.stats && c.status !== "approved" && (c.stats.match || 0) < 0.01).length; return w > 0 ? <button data-testid="weak-toggle" onClick={() => setShowWeak(!showWeak)} className="underline text-[11px] text-[#A0A0A0] hover:text-amber-300 text-left">{showWeak ? "Hide" : "Show"} {w} unlikely link{w === 1 ? "" : "s"} (no values in common)</button> : null; })()}
-                {data.candidates.filter((c) => showWeak || !(c.stats && c.status !== "approved" && (c.stats.match || 0) < 0.01)).map((c) => {
+                {(() => {
+                  const inScope = (c) => !scope || (ticked.includes(c.a.dataset) && ticked.includes(c.b.dataset)) || c.status !== "new";
+                  const bad = (c) => c.stats && c.status !== "approved" && !c.stats.usable;
+                  const hidden = data.candidates.filter((c) => !inScope(c)).length;
+                  const nbad = data.candidates.filter((c) => inScope(c) && bad(c) && (showWeak || (c.stats.match || 0) >= 0.01)).length;
+                  return (
+                    <div className="flex flex-wrap items-center gap-3 text-[11px] text-[#808080]">
+                      {hidden > 0 && <span data-testid="links-hidden">{hidden} suggestion(s) from tables you have not ticked are hidden.</span>}
+                      {nbad > 0 && <button data-testid="bad-toggle" onClick={() => setShowBad(!showBad)} className="underline hover:text-amber-300">{showBad ? "Hide" : "Show"} {nbad} link(s) that cannot be used</button>}
+                    </div>
+                  );
+                })()}
+                {data.candidates.filter((c) => (!scope || (ticked.includes(c.a.dataset) && ticked.includes(c.b.dataset)) || c.status !== "new") && (showBad || showWeak || !(c.stats && c.status !== "approved" && !c.stats.usable)) && (showWeak || !(c.stats && c.status !== "approved" && (c.stats.match || 0) < 0.01))).map((c) => {
                   const link = (data.links || []).find((l) => l.id === c.id) || c;
                   return (
                     <div key={c.id} data-testid="link-row" className="border border-[#2D2D2D] rounded-lg p-3 bg-[#1B1B1B]">
