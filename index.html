@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <!-- SAMM screen v42 -->
+    <!-- SAMM screen v43 -->
     <title>⚙️ SAMM Core AI Platform</title>
     <!-- React core (pinned, production builds) -->
     <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin></script>
@@ -293,14 +293,14 @@
         const status = res.status;
         const hints = {
           400: ["The request or the generated SQL was rejected. Try rephrasing the question."],
-          401: ["Your token is missing, wrong or expired. Sign out and enter a valid access token.", "Ask an admin to check SAMM_TOKEN_REGISTRY on the Lambda."],
+          401: payload && payload.action === "login" ? ["Check the e-mail and password. After five wrong tries the account pauses for 15 minutes.", "New accounts start on the starting password; your administrator can reset yours."] : ["Your sign-in is missing, wrong or has ended. Sign out and sign in again.", "If you use an access token, ask an admin to check SAMM_TOKEN_REGISTRY on the Lambda."],
           403: [
             "If the message names a role or column, your role is not allowed to do that.",
             "If it is a bare AWS 'Forbidden', the Function URL resource policy does not allow public invocation (auth NONE needs a lambda:InvokeFunctionUrl permission for principal *).",
           ],
           409: /tenant isolation|tenant column/i.test(serverMsg || "") ? ["The Gold view has no tenant column, so tenant isolation cannot be enforced. Rebuild that view from the Silver tab, or set ALLOW_UNSCOPED=true for single-tenant testing only."] : [],
           413: ["FinOps circuit breaker: this question would scan more than the per-query data limit, so SAMM stopped it before it could cost money.", "Narrow it by date range, dataset or site, then ask again."],
-          429: ["Too many requests or Bedrock throttling. Wait a moment and retry."],
+          429: payload && payload.action === "login" ? ["The account is paused after too many wrong tries. Wait the time shown, then try again."] : ["Too many requests or Bedrock throttling. Wait a moment and retry."],
           502: ["The model returned an empty or unusable answer. Retry; check Bedrock model access and MODEL_ID."],
           503: ["The server has no token registry configured (SAMM_TOKEN_REGISTRY is empty)."],
           504: ["The Lambda timed out. Raise the function timeout (about 60 s)."],
@@ -1078,29 +1078,82 @@
         );
       }
 
+      function PasswordForm({ url, token, oldPassword, forced, onDone, onCancel }) {
+        const [old, setOld] = useState(oldPassword || "");
+        const [n1, setN1] = useState("");
+        const [n2, setN2] = useState("");
+        const [busy, setBusy] = useState(false);
+        const [error, setError] = useState(null);
+        const submit = async (e) => {
+          e.preventDefault();
+          setError(null);
+          if (n1 !== n2) { setError(new ApiError("The two new passwords are not the same.", [])); return; }
+          setBusy(true);
+          try {
+            const r = await callBackend(url, token, { action: "change_password", old_password: old, new_password: n1 });
+            onDone(r.token);
+          } catch (err) { setError(err); } finally { setBusy(false); }
+        };
+        const field = "w-full bg-[#2D2D2D] border border-[#3D3D3D] rounded-md py-2 px-3 text-sm text-white focus:outline-none focus:border-amber-500";
+        return (
+          <form onSubmit={submit} data-testid="pw-form" className="space-y-3">
+            <p className="text-xs text-[#A0A0A0]">{forced ? "You are on the starting password. Choose your own to continue." : "Choose a new password."} Use at least 10 characters, with three of: lower case, upper case, numbers, symbols.</p>
+            {!oldPassword && (
+              <div>
+                <label htmlFor="pw-old" className="block text-xs text-[#A0A0A0] mb-1">Current password</label>
+                <input id="pw-old" type="password" autoComplete="current-password" value={old} onChange={(e) => setOld(e.target.value)} className={field} />
+              </div>
+            )}
+            <div>
+              <label htmlFor="pw-new" className="block text-xs text-[#A0A0A0] mb-1">New password</label>
+              <input id="pw-new" type="password" autoComplete="new-password" value={n1} onChange={(e) => setN1(e.target.value)} className={field} />
+            </div>
+            <div>
+              <label htmlFor="pw-new2" className="block text-xs text-[#A0A0A0] mb-1">New password again</label>
+              <input id="pw-new2" type="password" autoComplete="new-password" value={n2} onChange={(e) => setN2(e.target.value)} className={field} />
+            </div>
+            {error && <ErrorCard message={error.message} details={error.details} status={error.status} />}
+            <button type="submit" disabled={busy} data-testid="pw-save" className="w-full bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-bold text-sm py-2.5 rounded-lg transition">{busy ? "Saving..." : "Save password"}</button>
+            {onCancel && <button type="button" onClick={onCancel} className="w-full text-xs text-[#A0A0A0] hover:text-white underline">Cancel</button>}
+          </form>
+        );
+      }
+
       function SignIn({ onSignedIn, onDemo, defaultUrl }) {
         const [url, setUrl] = useState(defaultUrl);
+        const [mode, setMode] = useState("password");
+        const [email, setEmail] = useState("");
+        const [password, setPassword] = useState("");
         const [token, setToken] = useState("");
         const [busy, setBusy] = useState(false);
         const [error, setError] = useState(null);
+        const [pending, setPending] = useState(null);      // signed in on the starting password: must choose their own
+
+        const finish = async (u, t) => {
+          const who = await callBackend(u, t, { action: "whoami" });
+          onSignedIn({ url: u, token: t, identity: who });
+        };
 
         const submit = async (e) => {
           e.preventDefault();
           setError(null);
           const u = url.trim();
-          const t = token.trim();
           if (!/^https:\/\/\S+$/.test(u)) {
             setError(new ApiError("Endpoint must be an https:// URL (your Lambda Function URL).", []));
             return;
           }
-          if (!t) {
-            setError(new ApiError("Enter your access token.", []));
-            return;
-          }
           setBusy(true);
           try {
-            const who = await callBackend(u, t, { action: "whoami" });
-            onSignedIn({ url: u, token: t, identity: who });
+            if (mode === "token") {
+              const t = token.trim();
+              if (!t) throw new ApiError("Enter your access token.", []);
+              await finish(u, t);
+            } else {
+              if (!email.trim() || !password) throw new ApiError("Enter your e-mail and password.", []);
+              const r = await callBackend(u, "none", { action: "login", email: email.trim(), password });
+              if (r.must_change) setPending({ url: u, token: r.token, old: password });
+              else await finish(u, r.token);
+            }
           } catch (err) {
             setError(err);
           } finally {
@@ -1108,13 +1161,23 @@
           }
         };
 
+        const field = "w-full bg-[#2D2D2D] border border-[#3D3D3D] rounded-md py-2 px-3 text-sm text-white focus:outline-none focus:border-amber-500";
         return (
           <AuthShell testid="signin-shell">
+            {pending ? (
+              <div className="w-full samm-login-card p-8 space-y-4" data-testid="pw-first">
+                <div className="flex flex-col items-center text-center space-y-2 pb-2">
+                  <SammMark size={44} />
+                  <h1 className="font-semibold text-xl text-white tracking-tight">Choose your password</h1>
+                </div>
+                <PasswordForm url={pending.url} token={pending.token} oldPassword={pending.old} forced onDone={(t) => finish(pending.url, t).catch((err) => { setPending(null); setError(err); })} onCancel={() => setPending(null)} />
+              </div>
+            ) : (
             <form onSubmit={submit} className="w-full samm-login-card p-8 space-y-4">
               <div className="flex flex-col items-center text-center space-y-2 pb-2">
                 <SammMark size={44} />
                 <h1 className="font-semibold text-xl text-white tracking-tight">SAMM AI</h1>
-                <p className="text-xs text-[#A0A0A0]">Sign in with your access token</p>
+                <p className="text-xs text-[#A0A0A0]">{mode === "token" ? "Sign in with your access token" : "Sign in with your e-mail and password"}</p>
               </div>
               <div>
                 <label htmlFor="endpoint" className="block text-xs font-mono text-[#A0A0A0] mb-1">Endpoint (Lambda Function URL)</label>
@@ -1123,28 +1186,37 @@
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
                   placeholder="https://xxxx.lambda-url.eu-west-2.on.aws/"
-                  className="w-full bg-[#2D2D2D] border border-[#3D3D3D] rounded-md py-2 px-3 text-sm text-white font-mono focus:outline-none focus:border-amber-500"
+                  className={field + " font-mono"}
                 />
               </div>
-              <div>
-                <label htmlFor="token" className="block text-xs font-mono text-[#A0A0A0] mb-1">Access token</label>
-                <input
-                  id="token"
-                  type="password"
-                  autoComplete="off"
-                  value={token}
-                  onChange={(e) => setToken(e.target.value)}
-                  className="w-full bg-[#2D2D2D] border border-[#3D3D3D] rounded-md py-2 px-3 text-sm text-white font-mono focus:outline-none focus:border-amber-500"
-                />
-                <p className="text-[10px] text-[#707070] mt-1">Kept in memory only. It is gone when you close or refresh the tab.</p>
-              </div>
+              {mode === "token" ? (
+                <div>
+                  <label htmlFor="token" className="block text-xs font-mono text-[#A0A0A0] mb-1">Access token</label>
+                  <input id="token" type="password" autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)} className={field + " font-mono"} />
+                  <p className="text-[10px] text-[#707070] mt-1">Kept in memory only. It is gone when you close or refresh the tab.</p>
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <label htmlFor="email" className="block text-xs font-mono text-[#A0A0A0] mb-1">E-mail</label>
+                    <input id="email" type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} className={field} />
+                  </div>
+                  <div>
+                    <label htmlFor="password" className="block text-xs font-mono text-[#A0A0A0] mb-1">Password</label>
+                    <input id="password" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} className={field} />
+                  </div>
+                </>
+              )}
               {error && <ErrorCard message={error.message} details={error.details} status={error.status} />}
               <button
                 type="submit"
                 disabled={busy}
                 className="w-full bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-bold text-sm py-2.5 rounded-lg transition"
               >
-                {busy ? "Checking token..." : "Sign in"}
+                {busy ? "Signing in..." : "Sign in"}
+              </button>
+              <button type="button" data-testid={mode === "token" ? "use-password" : "use-token"} onClick={() => { setError(null); setMode(mode === "token" ? "password" : "token"); }} className="w-full text-xs text-[#A0A0A0] hover:text-white underline">
+                {mode === "token" ? "Use my e-mail and password instead" : "Use an access token instead"}
               </button>
               <button
                 type="button"
@@ -1154,6 +1226,7 @@
                 Explore in demo mode (simulated, nothing is sent)
               </button>
             </form>
+            )}
           </AuthShell>
         );
       }
@@ -3871,6 +3944,7 @@
         const [err, setErr] = useState("");
         const [busy, setBusy] = useState(false);
         const [issued, setIssued] = useState(null);
+        const [pwNote, setPwNote] = useState("");
         const [copied, setCopied] = useState(false);
         const [form, setForm] = useState({ email: "", role: "viewer", tenant_id: "", expires_days: "" });
         const [inv, setInv] = useState({ email: "", role: "viewer", reports: [], busy: false, msg: "", err: "" });
@@ -4041,18 +4115,20 @@
 
             <div className="bg-[#222222] border border-[#2D2D2D] rounded-xl p-6 shadow-xl space-y-3">
               <h3 className="text-sm font-bold text-white">Users ({rows.length})</h3>
+              {pwNote && <div data-testid="pw-reset-note" className="text-xs text-green-300 bg-[#10241A] border border-[#2D5A3D] rounded-md p-2">{pwNote}</div>}
               {!data && !err && <div className="text-xs text-[#A0A0A0]">Loading...</div>}
               <div className="space-y-2">
                 {rows.map((u) => (
                   <div key={u.email + u.tenant_id} data-testid="user-row" className="bg-[#151515] border border-[#2D2D2D] rounded-md p-3 flex flex-wrap gap-2 items-center text-xs font-mono">
                     <div className="flex-1 min-w-[12rem]">
                       <div className="text-white truncate">{u.email}</div>
-                      <div className="text-[#707070]">{u.tenant_id}{u.expires_at ? " | expires " + u.expires_at.slice(0, 10) : ""}{u.status === "disabled" ? " | DISABLED" : ""}</div>
+                      <div className="text-[#707070]">{u.tenant_id}{u.expires_at ? " | expires " + u.expires_at.slice(0, 10) : ""}{u.status === "disabled" ? " | DISABLED" : ""}{u.must_change ? " | on starting password" : ""}</div>
                     </div>
                     <select aria-label={"Role for " + u.email} value={u.role} disabled={busy || u.email === identity.email || !roles.includes(u.role)} onChange={(e) => save({ email: u.email, tenant_id: u.tenant_id, role: e.target.value })} className={inp}>
                       {ROLES_ORDER.map((r) => <option key={r} value={r} disabled={!roles.includes(r)}>{ROLE_LABELS[r]}</option>)}
                     </select>
                     <button disabled={busy || u.email === identity.email} onClick={() => save({ email: u.email, tenant_id: u.tenant_id, status: u.status === "disabled" ? "active" : "disabled" })} className={link}>{u.status === "disabled" ? "Enable" : "Disable"}</button>
+                    <button disabled={busy} data-testid={"pw-reset-" + u.email} onClick={async () => { if (window.confirm("Reset the password of " + u.email + " to the starting password? They will be asked to choose their own, and their current sign-in ends.")) { setBusy(true); try { const r = await api({ action: "password_reset", email: u.email }); setPwNote(r.note + " Starting password: " + r.starting_password); } catch (e) { setErr((e && e.message) || "Could not reset."); } finally { setBusy(false); } } }} className={link}>Reset password</button>
                     <button disabled={busy} onClick={() => { if (window.confirm("Issue a new token for " + u.email + "? The old token stops working.")) save({ email: u.email, tenant_id: u.tenant_id, reset_token: true, expires_days: u.expires_at ? 90 : undefined }); }} className={link}>Reset token</button>
                   </div>
                 ))}
@@ -4146,7 +4222,7 @@
       // ------------------------------------------------------------------
       // Main app
       // ------------------------------------------------------------------
-      function SammConsole({ session, demo, onSignOut }) {
+      function SammConsole({ session, demo, onSignOut, onToken }) {
         const identity = demo ? DEMO_IDENTITY : session.identity;
         const [previewRole, setPreviewRole] = useState(demo ? "admin" : null);
         const role = demo ? previewRole : identity.role;
@@ -4407,6 +4483,7 @@
           "navbtn w-full text-left flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition" + (activeTab === tab ? " on" : "");
         const PAGE_TITLES = { chat: "Ask SAMM", dashboard: "Reports", myviews: "My views", onboarding: "Onboarding", governance: "Authorizations" };
         const [uiTheme, flipTheme] = useTheme();
+        const [showPw, setShowPw] = useState(false);
 
         const splitLabel = split ? (split.reportId && openReport ? openReport.title : friendlyView(split.view || split.dataset, acting || identity.tenant_id)) : "";
         return (
@@ -4484,8 +4561,11 @@
                   <div className="text-xs font-mono space-y-1">
                     <div data-testid="who-role" className="text-white">{ROLE_LABELS[identity.role] || identity.role}</div>
                     <div className="side-muted truncate" title={identity.email}>{identity.email}</div>
-                    <div data-testid="who-version" className="side-muted opacity-80">Server {identity.version || "older than v35 - redeploy the backend"} · Screen v42</div>
-                    <button onClick={onSignOut} className="mt-2 side-muted hover-w underline">Sign out</button>
+                    <div data-testid="who-version" className="side-muted opacity-80">Server {identity.version || "older than v35 - redeploy the backend"} · Screen v43</div>
+                    <div className="flex gap-3 mt-2">
+                      {identity.can_change_password !== false && <button data-testid="change-password-open" onClick={() => setShowPw(true)} className="side-muted hover-w underline">Change password</button>}
+                      <button onClick={onSignOut} className="side-muted hover-w underline">Sign out</button>
+                    </div>
                   </div>
                 )}
                 {demo && <button onClick={onSignOut} className="mt-2 text-xs side-muted hover-w underline">Exit demo</button>}
@@ -4526,6 +4606,14 @@
                   </button>
                   <ThemeToggle />
                 </div>
+                {showPw && (
+                  <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(5,10,25,.6)" }} data-testid="pw-modal">
+                    <div className="samm-login-card p-6 w-full max-w-sm space-y-3">
+                      <h3 className="text-base font-semibold text-white">Change your password</h3>
+                      <PasswordForm url={session.url} token={session.token} onDone={(t) => { onToken && onToken(t); setShowPw(false); }} onCancel={() => setShowPw(false)} />
+                    </div>
+                  </div>
+                )}
               </header>
 
               <div className="flex-1 overflow-y-auto p-6 space-y-4">
@@ -4780,7 +4868,7 @@
         if (!session) {
           return <SignIn defaultUrl={API_URL} onSignedIn={setSession} onDemo={() => setDemo(true)} />;
         }
-        return <SammConsole session={session} demo={false} onSignOut={() => { rememberClear(); setSession(null); }} />;
+        return <SammConsole session={session} demo={false} onSignOut={() => { rememberClear(); setSession(null); }} onToken={(t) => { setSession((s) => ({ ...s, token: t })); if (rememberGet()) rememberSet(session.url, t); }} />;
       }
 
       ReactDOM.createRoot(document.getElementById("root")).render(<App />);
