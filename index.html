@@ -11,16 +11,134 @@
     <script src="https://unpkg.com/@babel/standalone@7.25.6/babel.min.js"></script>
     <!-- Tailwind CSS framework (pinned) -->
     <script src="https://cdn.tailwindcss.com/3.4.17"></script>
-    <style>
-      * { scrollbar-width: thin; scrollbar-color: #3d3d3d #1b1b1b; }
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <script>
+      // Apply the saved theme before the page paints, so there is no flash.
+      (function () {
+        var t = "dark";
+        try { t = localStorage.getItem("samm_theme") || "dark"; } catch (e) {}
+        document.documentElement.setAttribute("data-theme", t === "light" ? "light" : "dark");
+      })();
+    </script>
+    <style id="samm-theme">
+      :root, html[data-theme="dark"] {
+        --bg:#0e1527; --sunk:#0a1020; --panel:#121a2e; --card:#16203a; --field:#1d2848; --line:#27335a; --line2:#34436e;
+        --text:#e4e9f5; --strong:#ffffff; --muted:#98a5c3; --faint:#74829f; --soft:#c2cce2;
+        --accent:#2563eb; --accent-h:#3b7bff; --accent-t:#7fa8ff; --mint:#8ef4b2;
+        --tint-green:#10261d; --tint-amber:#2a2412; --tint-red:#2c1618; --line-green:#2d5a3d;
+        --shadow:0 1px 2px rgba(0,0,0,.35);
+        --side:#0a1226; --side-line:#1c2745; --side-text:#aab6d3; --side-hover:#141f3b;
+        color-scheme: dark;
+      }
+      html[data-theme="light"] {
+        --bg:#eef1f7; --sunk:#f4f6fb; --panel:#ffffff; --card:#ffffff; --field:#f1f4fa; --line:#dfe4ef; --line2:#c8d0e2;
+        --text:#1b2338; --strong:#0d1630; --muted:#56627f; --faint:#76819c; --soft:#364160;
+        --accent:#1d5fe0; --accent-h:#2f72f0; --accent-t:#1d4fd8; --mint:#0b8548;
+        --tint-green:#e5f6ed; --tint-amber:#fdf3dc; --tint-red:#fde9e9; --line-green:#a4d8b9;
+        --shadow:0 1px 3px rgba(20,32,70,.08);
+        --side:#0b1a3a; --side-line:#1d2c54; --side-text:#b4c0dd; --side-hover:#152751;
+        color-scheme: light;
+      }
+      html body { background-color: var(--bg) !important; color: var(--text) !important; font-family: Inter, system-ui, -apple-system, "Segoe UI", sans-serif !important; }
+      * { scrollbar-width: thin; scrollbar-color: var(--line2) transparent; }
       *::-webkit-scrollbar { width: 10px; height: 10px; }
-      *::-webkit-scrollbar-track { background: #1b1b1b; }
-      *::-webkit-scrollbar-thumb { background: #3d3d3d; border-radius: 8px; border: 2px solid #1b1b1b; }
-      *::-webkit-scrollbar-thumb:hover { background: #55607a; }
-      *::-webkit-scrollbar-corner { background: #1b1b1b; }
+      *::-webkit-scrollbar-track { background: transparent; }
+      *::-webkit-scrollbar-thumb { background: var(--line2); border-radius: 8px; border: 2px solid transparent; background-clip: content-box; }
+      *::-webkit-scrollbar-thumb:hover { background: var(--faint); background-clip: content-box; }
+      input::placeholder, textarea::placeholder { color: var(--faint); }
+      input, select, textarea { color: var(--strong); }
+      select option { background: var(--card); color: var(--strong); }
+      /* --- class remap: the old hard-coded colours now follow the theme --- */
+      html body .bg-\[\#191919\]{background-color:var(--bg) !important}
+      html body .bg-\[\#151515\]{background-color:var(--sunk) !important}
+      html body .bg-\[\#181818\]{background-color:var(--sunk) !important}
+      html body .bg-\[\#1B1B1B\]{background-color:var(--sunk) !important}
+      html body .bg-\[\#1A1A1A\]{background-color:var(--panel) !important}
+      html body .bg-\[\#1D1D1D\]{background-color:var(--panel) !important}
+      html body .bg-\[\#1E1E1E\]{background-color:var(--panel) !important}
+      html body .bg-\[\#202020\]{background-color:var(--panel) !important}
+      html body .bg-\[\#222222\]{background-color:var(--card) !important}
+      html body .bg-\[\#2D2D2D\]{background-color:var(--field) !important}
+      html body .bg-\[\#333\]{background-color:var(--field) !important}
+      html body .bg-\[\#252525\]{background-color:var(--field) !important}
+      html body .bg-\[\#2c385d\]{background-color:var(--field) !important}
+      html body .bg-\[\#1c2748\]{background-color:var(--field) !important}
+      html body .bg-\[\#1b2a55\]{background-color:var(--field) !important}
+      html body .hover\:bg-\[\#252525\]:hover{background-color:var(--field) !important}
+      html body .border-\[\#2D2D2D\]{border-color:var(--line) !important}
+      html body .border-\[\#262626\]{border-color:var(--line) !important}
+      html body .border-\[\#2A2A2A\]{border-color:var(--line) !important}
+      html body .border-\[\#3D3D3D\]{border-color:var(--line2) !important}
+      html body .border-\[\#333\]{border-color:var(--line2) !important}
+      html body .border-\[\#2c385d\]{border-color:var(--line2) !important}
+      html body .hover\:border-\[\#3D3D3D\]:hover{border-color:var(--line2) !important}
+      html body .text-\[\#A0A0A0\]{color:var(--muted) !important}
+      html body .text-\[\#78869b\]{color:var(--muted) !important}
+      html body .text-\[\#808080\]{color:var(--faint) !important}
+      html body .text-\[\#707070\]{color:var(--faint) !important}
+      html body .text-\[\#777\]{color:var(--faint) !important}
+      html body .text-\[\#606060\]{color:var(--faint) !important}
+      html body .text-\[\#555555\]{color:var(--faint) !important}
+      html body .text-\[\#C0C0C0\]{color:var(--soft) !important}
+      html body .text-\[\#BBB\]{color:var(--soft) !important}
+      html body .text-\[\#D0D0D0\]{color:var(--soft) !important}
+      html body .text-\[\#b8c2d6\]{color:var(--soft) !important}
+      html body .text-\[\#E3E3E3\]{color:var(--text) !important}
+      html body .text-white{color:var(--strong)}
+      html body .hover\:text-white:hover{color:var(--strong)}
+      html body .bg-amber-600,html body .bg-amber-500{background-color:var(--accent);color:#fff}
+      html body .hover\:bg-amber-500:hover,html body .hover\:bg-amber-400:hover{background-color:var(--accent-h)}
+      html body .bg-amber-600.text-white,html body .bg-amber-500.text-white{color:#fff}
+      html body .border-amber-500,html body .border-amber-600,html body .focus\:border-amber-500:focus,html body .hover\:border-amber-500:hover,html body .hover\:border-amber-600:hover{border-color:var(--accent)}
+      html body .text-amber-500{color:var(--accent-t)}
+      html body .border-amber-500\/60,html body .border-amber-500\/50{border-color:var(--accent)}
+      html body .text-\[\#8ef4b2\]{color:var(--mint) !important}
+      html body .hover\:border-\[\#8ef4b2\]:hover{border-color:var(--mint) !important}
+      html body .bg-\[\#10241A\]{background-color:var(--tint-green) !important}
+      html body .bg-\[\#241E10\]{background-color:var(--tint-amber) !important}
+      html body .bg-\[\#2A2418\]{background-color:var(--tint-amber) !important}
+      html body .bg-\[\#2A2410\]{background-color:var(--tint-amber) !important}
+      html body .bg-\[\#2A1515\]{background-color:var(--tint-red) !important}
+      html body .border-\[\#2D5A3D\]{border-color:var(--line-green) !important}
+      /* --- light-mode readability for semantic colours --- */
+      html[data-theme="light"] body .text-green-300, html[data-theme="light"] body .text-green-200, html[data-theme="light"] body .text-green-400, html[data-theme="light"] body .text-emerald-300, html[data-theme="light"] body .text-emerald-400 { color:#12703c; }
+      html[data-theme="light"] body .text-red-300, html[data-theme="light"] body .text-red-200, html[data-theme="light"] body .text-red-400, html[data-theme="light"] body .text-red-200\/90 { color:#b3261e; }
+      html[data-theme="light"] body .text-amber-300, html[data-theme="light"] body .text-amber-200, html[data-theme="light"] body .text-amber-400, html[data-theme="light"] body .text-amber-100, html[data-theme="light"] body .text-amber-400\/80 { color:#8a5a00; }
+      html[data-theme="light"] body .text-blue-200 { color:#1d4ed8; }
+      html[data-theme="light"] body .text-purple-200 { color:#6d28d9; }
+      html[data-theme="light"] body .text-\[\#ffe08a\] { color:#8a5a00 !important; }
+      html[data-theme="light"] body .bg-red-900\/20, html[data-theme="light"] body .bg-red-950\/40, html[data-theme="light"] body .hover\:bg-red-900\/30:hover { background-color:#fde9e9; }
+      html[data-theme="light"] body .bg-green-900, html[data-theme="light"] body .hover\:bg-green-900\/30:hover { background-color:#e5f6ed; }
+      html[data-theme="light"] body .bg-amber-900, html[data-theme="light"] body .bg-amber-900\/40, html[data-theme="light"] body .hover\:bg-amber-900\/30:hover, html[data-theme="light"] body .bg-amber-500\/10, html[data-theme="light"] body .bg-amber-400\/10 { background-color:#fdf3dc; }
+      html[data-theme="light"] body .bg-blue-900 { background-color:#e3ecff; }
+      html[data-theme="light"] body .bg-purple-900 { background-color:#efe7ff; }
+      html[data-theme="light"] body .bg-white\/5, html[data-theme="light"] body .hover\:bg-white\/5:hover { background-color:rgba(20,32,70,.05); }
+      html[data-theme="light"] body .border-green-700, html[data-theme="light"] body .border-green-800 { border-color:#a4d8b9; }
+      html[data-theme="light"] body .border-red-800, html[data-theme="light"] body .border-red-900, html[data-theme="light"] body .border-red-700 { border-color:#f1b5b0; }
+      html[data-theme="light"] body .border-amber-700, html[data-theme="light"] body .border-amber-800, html[data-theme="light"] body .border-amber-900 { border-color:#ebc77d; }
+      html[data-theme="light"] body .bg-\[\#8ef4b2\] { background-color:#0b8548; color:#fff; }
+      /* --- SILO-style shell --- */
+      .samm-card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); }
+      html body .samm-side { background: var(--side) !important; border-color: var(--side-line) !important; }
+      html body .samm-side, html body .samm-side .text-white { color:#fff !important; }
+      html body .samm-side .side-muted { color: var(--side-text) !important; }
+      html body .samm-side .side-label { color:#6f7fa6 !important; }
+      html body .samm-side select, .samm-side .side-field { background:#111c3a !important; border-color:#24335e !important; color:#fff !important; }
+      html body .samm-side .navbtn { color: var(--side-text) !important; border-left: 3px solid transparent; }
+      html body .samm-side .navbtn:hover:not(:disabled) { background:#15244a !important; color:#fff !important; }
+      html body .samm-side .navbtn.on { background:#1a2d5c !important; color:#fff !important; border-left-color: var(--accent-h); }
+      html body .samm-side .navbtn:disabled { color:#4a587c !important; cursor:not-allowed; }
+      html body .samm-side .side-muted.hover-w:hover { color:#fff !important; }
+      .samm-page-title { font-size: 22px; font-weight: 600; color: var(--strong); letter-spacing: -.01em; }
+      .samm-iconbtn { display:inline-flex; align-items:center; justify-content:center; width:34px; height:34px; border-radius:8px; border:1px solid var(--line2); background:var(--card); color:var(--muted); cursor:pointer; }
+      .samm-iconbtn:hover { color:var(--strong); border-color:var(--accent); }
+      .samm-login-bg { background: var(--bg); }
+      .samm-login-card { background: var(--card); border:1px solid var(--line); border-radius:14px; box-shadow: 0 10px 30px rgba(10,20,50,.18); }
+      html[data-theme="light"] .samm-login-card { background:#fff; }
     </style>
   </head>
-  <body style="margin: 0; padding: 0; background-color: #191919; color: #E3E3E3; font-family: sans-serif;">
+  <body style="margin: 0; padding: 0;">
     <div id="root"></div>
 
     <script type="text/babel">
@@ -342,7 +460,7 @@
             <svg ref={ref} xmlns="http://www.w3.org/2000/svg" viewBox={"0 0 " + W + " " + H} className="w-full" role="img" aria-label={"Chart of " + series.join(", ") + " by " + label} fontFamily="ui-monospace, monospace">
               {ticks.map((t, i) => (
                 <g key={i}>
-                  <line x1={L} x2={W - R} y1={y(t)} y2={y(t)} stroke="#2D2D2D" />
+                  <line x1={L} x2={W - R} y1={y(t)} y2={y(t)} style={{ stroke: "var(--line)" }} />
                   <text x={L - 6} y={y(t) + 3} textAnchor="end" fontSize="10" fill="#A0A0A0">{fmtNum(t)}</text>
                 </g>
               ))}
@@ -833,6 +951,54 @@
         );
       }
 
+      // ---- SAMM look and feel: own mark, icons and theme switch (original code) ----
+      function SammMark({ size }) {
+        const z = size || 28;
+        return (
+          <svg width={z} height={z} viewBox="0 0 32 32" aria-hidden="true" data-testid="samm-mark">
+            <rect width="32" height="32" rx="8" fill="#1d5fe0" />
+            <path d="M16 6.5 26 11.5 16 16.5 6 11.5Z" fill="#ffffff" />
+            <path d="M6 16 16 21 26 16" fill="none" stroke="#bcd3ff" strokeWidth="2" strokeLinejoin="round" />
+            <path d="M6 20.5 16 25.5 26 20.5" fill="none" stroke="#7fa8ff" strokeWidth="2" strokeLinejoin="round" />
+          </svg>
+        );
+      }
+      const ICONS = {
+        chat: "M4 5h16v10H9l-5 4z",
+        reports: "M5 20V10M12 20V4M19 20v-7",
+        views: "M3 7l9-4 9 4-9 4zM3 12l9 4 9-4M3 17l9 4 9-4",
+        onboarding: "M12 3v12M7 10l5 5 5-5M4 20h16",
+        auth: "M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z",
+        moon: "M20 14.5A8 8 0 1 1 9.5 4 6.5 6.5 0 0 0 20 14.5z",
+        sun: "M12 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10zM12 1v3M12 20v3M1 12h3M20 12h3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1",
+        files: "M6 3h8l4 4v14H6zM14 3v4h4",
+        out: "M10 4H5v16h5M15 8l5 4-5 4M20 12H9",
+      };
+      function Icon({ name, size }) {
+        const z = size || 18;
+        return (
+          <svg width={z} height={z} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={ICONS[name]} /></svg>
+        );
+      }
+      function useTheme() {
+        const [theme, setTheme] = useState(() => (document.documentElement.getAttribute("data-theme") === "light" ? "light" : "dark"));
+        const flip = () => {
+          const t = theme === "dark" ? "light" : "dark";
+          document.documentElement.setAttribute("data-theme", t);
+          try { localStorage.setItem("samm_theme", t); } catch (_) { /* remembering is optional */ }
+          setTheme(t);
+        };
+        return [theme, flip];
+      }
+      function ThemeToggle() {
+        const [theme, flip] = useTheme();
+        return (
+          <button type="button" onClick={flip} data-testid="theme-toggle" className="samm-iconbtn" aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"} title={theme === "dark" ? "Light theme" : "Dark theme"}>
+            <Icon name={theme === "dark" ? "sun" : "moon"} size={16} />
+          </button>
+        );
+      }
+
       function SimBadge({ children }) {
         return (
           <span className="text-xs uppercase bg-amber-900/40 text-amber-400 font-mono px-2.5 py-1 rounded border border-amber-700">
@@ -872,14 +1038,13 @@
         };
 
         return (
-          <div className="min-h-screen flex items-center justify-center bg-[#191919] p-4">
-            <form onSubmit={submit} className="w-full max-w-md bg-[#222222] border border-[#2D2D2D] rounded-xl p-6 shadow-xl space-y-4">
-              <div className="flex items-center space-x-3 border-b border-[#2D2D2D] pb-4">
-                <div className="bg-amber-600 px-3 py-1 rounded-lg text-white font-bold text-sm">SAMM</div>
-                <div>
-                  <h1 className="font-bold text-base text-white tracking-wide">SAMM AI</h1>
-                  <p className="text-[10px] text-amber-500 font-mono">Sign in with your access token</p>
-                </div>
+          <div className="min-h-screen flex items-center justify-center samm-login-bg p-4 relative">
+            <div className="absolute top-4 right-4"><ThemeToggle /></div>
+            <form onSubmit={submit} className="w-full max-w-md samm-login-card p-8 space-y-4">
+              <div className="flex flex-col items-center text-center space-y-2 pb-2">
+                <SammMark size={44} />
+                <h1 className="font-semibold text-xl text-white tracking-tight">SAMM AI</h1>
+                <p className="text-xs text-[#A0A0A0]">Sign in with your access token</p>
               </div>
               <div>
                 <label htmlFor="endpoint" className="block text-xs font-mono text-[#A0A0A0] mb-1">Endpoint (Lambda Function URL)</label>
@@ -1139,6 +1304,7 @@
       // ------------------------------------------------------------------
       const DATE_FORMATS = ["dd/MM/yyyy", "MM/dd/yyyy", "yyyyMMdd", "yyyy-MM-dd"];
       const COMPARE_OPS = ["<=", "<", ">=", ">", "=", "<>"];
+      const WHEN_OPS = ["=", "<>", "<", "<=", ">", ">="];       // v38: if-then rules
       const ARITH_OPS = ["+", "-", "*", "/"];
       function MappingEditor({ dataset, jobId, api, onBuilt, onClose, onAsk }) {
         const [pm, setPm] = useState(null);
@@ -1150,7 +1316,7 @@
         const [busy, setBusy] = useState(false);
         const [built, setBuilt] = useState(null);
         const [quality, setQuality] = useState(null);
-        const [nr, setNr] = useState({ kind: "range", column: "", column2: "", name: "", min: "", max: "", values: "", fmt: "dd/MM/yyyy", decimal: ".", op: "<=" });
+        const [nr, setNr] = useState({ kind: "range", column: "", column2: "", name: "", min: "", max: "", values: "", fmt: "dd/MM/yyyy", decimal: ".", op: "<=", require: false, wop: "=", wval: "", then: "not_null", top: ">", tval: "0", tvals: "", rtab: "", rcol: "" });
         const seq = useRef(0);
 
         useEffect(() => {
@@ -1185,6 +1351,9 @@
           if (k === "to_number") r.params = { decimal: nr.decimal };
           if (k === "compare") { r.column2 = nr.column2 || cols[0]; r.params = { op: nr.op }; }
           if (k === "derive") { r.column2 = nr.column2 || cols[0]; r.params = { op: ARITH_OPS.includes(nr.op) ? nr.op : "-" }; r.name = nr.name; }
+          if (k === "unique") r.params = { require: !!nr.require };
+          if (k === "if_then") { r.column2 = nr.column2 || cols[0]; r.params = { when_op: nr.wop, when_value: nr.wval, then: nr.then }; if (nr.then === "compare") { r.params.then_op = nr.top; r.params.then_value = nr.tval; } if (nr.then === "allowed") r.params.then_values = nr.tvals; }
+          if (k === "no_match") { const rt = nr.rtab || Object.keys(pm.ref_tables || {})[0] || ""; r.params = { ref_dataset: rt, ref_column: nr.rcol || ((pm.ref_tables || {})[rt] || [])[0] || "" }; }
           setRules((p) => [...p, r]);
         };
         const addSuggested = () => {
@@ -1297,6 +1466,20 @@
                           <select aria-label={"Second field for " + r.id} disabled={dis} value={r.column2} onChange={(e) => setRule(i, { column2: e.target.value })} className={inp}>{cols.map((c) => <option key={c}>{c}</option>)}</select>
                           <input aria-label={"New column name for " + r.id} disabled={dis} value={r.name || ""} onChange={(e) => setRule(i, { name: e.target.value })} className={inp + " w-32"} placeholder="new column" />
                         </>)}
+                        {r.kind === "unique" && <label className="flex items-center gap-1 text-[11px] text-[#C0C0C0]"><input type="checkbox" aria-label={"Never empty for " + r.id} disabled={dis} checked={!!(r.params || {}).require} onChange={(e) => setParam(i, "require", e.target.checked)} />never empty (a key)</label>}
+                        {r.kind === "if_then" && (<>
+                          <select aria-label={"When comparison for " + r.id} disabled={dis} value={r.params.when_op} onChange={(e) => setParam(i, "when_op", e.target.value)} className={inp}>{WHEN_OPS.map((o) => <option key={o}>{o}</option>)}</select>
+                          <input aria-label={"When value for " + r.id} disabled={dis} value={r.params.when_value == null ? "" : r.params.when_value} onChange={(e) => setParam(i, "when_value", e.target.value)} className={inp + " w-24"} placeholder="value" />
+                          <span className="text-[#808080]">then</span>
+                          <select aria-label={"Then field for " + r.id} disabled={dis} value={r.column2} onChange={(e) => setRule(i, { column2: e.target.value })} className={inp}>{cols.map((c) => <option key={c}>{c}</option>)}</select>
+                          <select aria-label={"Then rule for " + r.id} disabled={dis} value={r.params.then} onChange={(e) => setParam(i, "then", e.target.value)} className={inp}><option value="not_null">must not be empty</option><option value="compare">must compare with a number</option><option value="allowed">must be one of</option></select>
+                          {r.params.then === "compare" && (<><select aria-label={"Then comparison for " + r.id} disabled={dis} value={r.params.then_op} onChange={(e) => setParam(i, "then_op", e.target.value)} className={inp}>{COMPARE_OPS.map((o) => <option key={o}>{o}</option>)}</select><input aria-label={"Then number for " + r.id} type="number" disabled={dis} value={r.params.then_value == null ? "" : r.params.then_value} onChange={(e) => setParam(i, "then_value", e.target.value)} className={inp + " w-20"} /></>)}
+                          {r.params.then === "allowed" && <input aria-label={"Then values for " + r.id} disabled={dis} value={Array.isArray(r.params.then_values) ? r.params.then_values.join(", ") : (r.params.then_values || "")} onChange={(e) => setParam(i, "then_values", e.target.value)} className={inp + " w-40"} />}
+                        </>)}
+                        {r.kind === "no_match" && (<>
+                          <select aria-label={"Look in table for " + r.id} disabled={dis} value={r.params.ref_dataset} onChange={(e) => setRule(i, { params: { ref_dataset: e.target.value, ref_column: ((pm.ref_tables || {})[e.target.value] || [])[0] || "" } })} className={inp}>{Object.keys(pm.ref_tables || {}).map((t2) => <option key={t2} value={t2}>{t2.replace(/^silver_/, "").replace(/_/g, " ")}</option>)}</select>
+                          <select aria-label={"Look in column for " + r.id} disabled={dis} value={r.params.ref_column} onChange={(e) => setParam(i, "ref_column", e.target.value)} className={inp}>{((pm.ref_tables || {})[r.params.ref_dataset] || []).map((c) => <option key={c}>{c}</option>)}</select>
+                        </>)}
                         <select aria-label={"Status for " + r.id} disabled={dis} value={r.status} onChange={(e) => setRule(i, { status: e.target.value })} className={inp + " ml-auto"}>
                           <option value="active">active</option><option value="suggested">suggested</option><option value="off">off</option>
                         </select>
@@ -1308,7 +1491,7 @@
                 </div>
                 {!locked && (
                   <div className="border border-[#2D2D2D] rounded-md p-3 space-y-2">
-                    <div className="text-[11px] text-[#A0A0A0]">Add a rule</div>
+                    <div className="text-[11px] text-[#A0A0A0] flex flex-wrap gap-3">Add a rule<span data-testid="rule-count" className={rules.length >= (pm.max_rules || 60) ? "text-amber-300" : "text-[#808080]"}>{rules.length} of {pm.max_rules || 60} rules{rules.length >= (pm.max_rules || 60) ? " - the limit is reached, remove one to add another" : ""}</span></div>
                     <div className="flex flex-wrap items-center gap-2 text-xs">
                       <select aria-label="New rule type" value={nr.kind} onChange={(e) => setNr({ ...nr, kind: e.target.value })} className={inp}>{Object.keys(pm.rule_kinds).map((k) => <option key={k} value={k}>{pm.rule_kinds[k].help}</option>)}</select>
                       <select aria-label="New rule field" value={nr.column} onChange={(e) => setNr({ ...nr, column: e.target.value })} className={inp}>{cols.map((c) => <option key={c}>{c}</option>)}</select>
@@ -1317,7 +1500,23 @@
                       {nr.kind === "to_date" && <select aria-label="New rule date format" value={nr.fmt} onChange={(e) => setNr({ ...nr, fmt: e.target.value })} className={inp}>{DATE_FORMATS.map((f) => <option key={f}>{f}</option>)}</select>}
                       {nr.kind === "compare" && (<><select aria-label="New rule comparison" value={nr.op} onChange={(e) => setNr({ ...nr, op: e.target.value })} className={inp}>{COMPARE_OPS.map((o) => <option key={o}>{o}</option>)}</select><select aria-label="New rule other field" value={nr.column2} onChange={(e) => setNr({ ...nr, column2: e.target.value })} className={inp}><option value="">(choose)</option>{cols.map((c) => <option key={c}>{c}</option>)}</select></>)}
                       {nr.kind === "derive" && (<><select aria-label="New rule operation" value={ARITH_OPS.includes(nr.op) ? nr.op : "-"} onChange={(e) => setNr({ ...nr, op: e.target.value })} className={inp}>{ARITH_OPS.map((o) => <option key={o}>{o}</option>)}</select><select aria-label="New rule second field" value={nr.column2} onChange={(e) => setNr({ ...nr, column2: e.target.value })} className={inp}><option value="">(choose)</option>{cols.map((c) => <option key={c}>{c}</option>)}</select><input aria-label="New rule column name" value={nr.name} onChange={(e) => setNr({ ...nr, name: e.target.value })} className={inp + " w-32"} placeholder="new column" /></>)}
-                      <button data-testid="add-rule" onClick={addRule} className="border border-[#3D3D3D] hover:border-amber-500 text-white px-3 py-1 rounded-md">Add</button>
+                      {nr.kind === "unique" && <label className="flex items-center gap-1 text-[11px] text-[#C0C0C0]"><input type="checkbox" aria-label="New rule never empty" checked={!!nr.require} onChange={(e) => setNr({ ...nr, require: e.target.checked })} />never empty (a key)</label>}
+                      {nr.kind === "if_then" && (<>
+                        <select aria-label="New rule when comparison" value={nr.wop} onChange={(e) => setNr({ ...nr, wop: e.target.value })} className={inp}>{WHEN_OPS.map((o) => <option key={o}>{o}</option>)}</select>
+                        <input aria-label="New rule when value" value={nr.wval} onChange={(e) => setNr({ ...nr, wval: e.target.value })} className={inp + " w-24"} placeholder="value" />
+                        <span className="text-[#808080]">then</span>
+                        <select aria-label="New rule then field" value={nr.column2} onChange={(e) => setNr({ ...nr, column2: e.target.value })} className={inp}>{cols.map((c) => <option key={c}>{c}</option>)}</select>
+                        <select aria-label="New rule then rule" value={nr.then} onChange={(e) => setNr({ ...nr, then: e.target.value })} className={inp}><option value="not_null">must not be empty</option><option value="compare">must compare with a number</option><option value="allowed">must be one of</option></select>
+                        {nr.then === "compare" && (<><select aria-label="New rule then comparison" value={nr.top} onChange={(e) => setNr({ ...nr, top: e.target.value })} className={inp}>{COMPARE_OPS.map((o) => <option key={o}>{o}</option>)}</select><input aria-label="New rule then number" type="number" value={nr.tval} onChange={(e) => setNr({ ...nr, tval: e.target.value })} className={inp + " w-20"} /></>)}
+                        {nr.then === "allowed" && <input aria-label="New rule then values" value={nr.tvals} onChange={(e) => setNr({ ...nr, tvals: e.target.value })} className={inp + " w-40"} placeholder="a, b, c" />}
+                      </>)}
+                      {nr.kind === "no_match" && (Object.keys(pm.ref_tables || {}).length === 0
+                        ? <span className="text-[#808080]">No other table has a Gold view yet to look in.</span>
+                        : (<>
+                          <select aria-label="New rule look in table" value={nr.rtab || Object.keys(pm.ref_tables)[0]} onChange={(e) => setNr({ ...nr, rtab: e.target.value, rcol: "" })} className={inp}>{Object.keys(pm.ref_tables).map((t2) => <option key={t2} value={t2}>{t2.replace(/^silver_/, "").replace(/_/g, " ")}</option>)}</select>
+                          <select aria-label="New rule look in column" value={nr.rcol || (pm.ref_tables[nr.rtab || Object.keys(pm.ref_tables)[0]] || [])[0] || ""} onChange={(e) => setNr({ ...nr, rcol: e.target.value })} className={inp}>{(pm.ref_tables[nr.rtab || Object.keys(pm.ref_tables)[0]] || []).map((c) => <option key={c}>{c}</option>)}</select>
+                        </>))}
+                      <button data-testid="add-rule" onClick={addRule} disabled={rules.length >= (pm.max_rules || 60)} className="border border-[#3D3D3D] hover:border-amber-500 text-white px-3 py-1 rounded-md disabled:opacity-50">Add</button>
                       <button data-testid="add-suggested" onClick={addSuggested} className="text-amber-400 hover:text-amber-300 underline">Add SAMM's suggestions I don't have yet</button>
                     </div>
                   </div>
@@ -1512,6 +1711,14 @@
           </div>
         );
       }
+      // v38: who may delete at each layer is set per client under Authorizations. Until the back end says otherwise, an engineer and above may.
+      function canDeleteAt(layer) {
+        const cd = window.__sammCanDelete;
+        if (cd && typeof cd[layer] === "boolean") return cd[layer];
+        return ["engineer", "admin", "system_admin"].includes(window.__sammRole);
+      }
+      const DELETE_NOTE = "Your role cannot delete at this layer. An administrator can change who may under Authorizations.";
+
       function DatasetAdvanced({ api, dataset, layer }) {
         const showNames = layer !== "silver";
         const showRemove = layer === "silver";
@@ -1527,6 +1734,7 @@
         const [busy, setBusy] = useState(false);
         const [rem, setRem] = useState(null);
         const [typed, setTyped] = useState("");
+        const [dd, setDd] = useState(null);       // v38: remove duplicate rows
         const bt = "border border-[#3D3D3D] hover:border-amber-500 text-white text-xs px-3 py-1 rounded-md disabled:opacity-50";
         const inp = "bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-xs text-white";
         useEffect(() => {
@@ -1546,6 +1754,15 @@
           setBusy(true); setErr(""); setMsg(""); setRem(null); setTyped("");
           try { setRem(await api({ action: "dataset_remove", dataset })); } catch (e) { setErr(e.message || "Could not check."); } finally { setBusy(false); }
         };
+        const ddRun = async (mode) => {
+          setBusy(true); setErr(""); setMsg("");
+          try {
+            const r = await api({ action: "silver_dedupe", dataset, ...(mode ? { mode } : {}) });
+            setDd(r);
+            if (mode === "apply" && r.applied) { setMsg("Removed " + r.duplicates + " duplicate row(s). " + r.after + " rows are left. The original is kept, so you can undo this."); window.dispatchEvent(new CustomEvent("samm-datasets-changed", { detail: { msg: "Removed " + r.duplicates + " duplicate row(s) from " + friendlyDs(dataset) + "." } })); }
+            if (mode === "undo") { setMsg("Put the original rows back."); setDd(null); }
+          } catch (e) { setErr(e.message || "Could not do that."); } finally { setBusy(false); }
+        };
         const removeNow = async () => {
           setBusy(true); setErr("");
           try {
@@ -1564,7 +1781,7 @@
         const PL = { views: "Gold view(s)", personal_views: "personal view(s)", reports: "report(s)", links: "link(s)", drill_downs: "drill-down(s)", access_grants: "analyst access grant(s)" };
         return (
           <div data-testid="dataset-advanced" className="space-y-2">
-            <button data-testid="adv-toggle" onClick={() => setOpen(!open)} className="underline text-xs font-mono text-amber-400 hover:text-amber-300">{showRemove ? (open ? "Hide" : "Remove table") : (open ? "Hide name and update settings" : "Name and update settings")}</button>
+            <button data-testid="adv-toggle" onClick={() => setOpen(!open)} className="underline text-xs font-mono text-amber-400 hover:text-amber-300">{showRemove ? (open ? "Hide" : "Clean up or remove table") : (open ? "Hide name and update settings" : "Name and update settings")}</button>
             {open && (
               <div className="border border-[#2D2D2D] rounded-lg p-3 bg-[#1B1B1B] space-y-3 text-xs text-[#C0C0C0]">
                 {showNames && <div className="space-y-2">
@@ -1602,7 +1819,25 @@
                     </>
                   )}
                 </div>}
-                {showRemove && <div className="space-y-2">
+                {showRemove && <div className="space-y-2" data-testid="dedupe-box">
+                  <div className="font-semibold text-white">Remove duplicate rows</div>
+                  <div>Finds rows where every column is the same (ignoring capital letters and extra spaces) and keeps one of each. The original rows are kept aside, so you can undo it.</div>
+                  <button data-testid="dd-check" disabled={busy} onClick={() => ddRun(null)} className={bt}>Look for duplicate rows</button>
+                  {dd && dd.mode === "preview" && (
+                    <div data-testid="dd-plan" className="bg-[#151515] border border-[#2D2D2D] rounded p-2 space-y-1">
+                      {dd.duplicates === 0
+                        ? <div className="text-green-300">No duplicate rows in {dd.rows.toLocaleString()} rows.</div>
+                        : (<>
+                          <div className="text-white"><b>{dd.duplicates.toLocaleString()}</b> of {dd.rows.toLocaleString()} rows are exact copies of another row. {dd.after.toLocaleString()} rows would be left.</div>
+                          {(dd.sample || []).length > 0 && <div className="text-[#A0A0A0]">For example: {dd.sample.map((r) => Object.values(r).join(" / ")).join("  |  ")}</div>}
+                          <button data-testid="dd-apply" disabled={busy || !canDeleteAt("silver")} title={canDeleteAt("silver") ? "" : DELETE_NOTE} onClick={() => ddRun("apply")} className="bg-amber-600 hover:bg-amber-500 text-white font-bold px-3 py-1 rounded-md disabled:opacity-50">{busy ? "Removing..." : "Remove the copies"}</button>
+                          {!canDeleteAt("silver") && <div className="text-amber-200">{DELETE_NOTE}</div>}
+                        </>)}
+                    </div>
+                  )}
+                  {dd && dd.can_undo && <button data-testid="dd-undo" disabled={busy || !canDeleteAt("silver")} onClick={() => ddRun("undo")} className={bt}>Undo the last removal</button>}
+                </div>}
+                {showRemove && <div className="space-y-2 border-t border-[#2D2D2D] pt-2">
                   <div className="font-semibold text-white">Remove this table</div>
                   <div>Removes the table, its Gold view, mapping, rules, reports, links, drill-downs and analyst access for this client. The file you uploaded in Bronze stays, so you can upload it again.</div>
                   <button data-testid="rem-check" disabled={busy} onClick={checkRemove} className={bt}>Check what will be removed</button>
@@ -1613,7 +1848,7 @@
                       {(rem.plan.warnings || []).map((w, i) => <div key={i} className="text-amber-200">{w}</div>)}
                       <div className="flex flex-wrap gap-2 items-center pt-1">
                         <input data-testid="rem-confirm" aria-label="Type the dataset name to confirm" value={typed} onChange={(e) => setTyped(e.target.value)} placeholder={"Type " + dataset + " to confirm"} className={inp + " w-72"} />
-                        <button data-testid="rem-apply" disabled={busy || typed.trim() !== dataset} onClick={removeNow} className="bg-red-700 hover:bg-red-600 text-white font-bold px-3 py-1 rounded-md disabled:opacity-50">{busy ? "Removing..." : "Remove now"}</button>
+                        <button data-testid="rem-apply" disabled={busy || typed.trim() !== dataset || !canDeleteAt("silver")} title={canDeleteAt("silver") ? "" : DELETE_NOTE} onClick={removeNow} className="bg-red-700 hover:bg-red-600 text-white font-bold px-3 py-1 rounded-md disabled:opacity-50">{busy ? "Removing..." : "Remove now"}</button>
                       </div>
                     </div>
                   )}
@@ -1725,7 +1960,7 @@
         return (
           <div data-testid="notice-bar" role="status" className="flex flex-wrap items-center gap-3 text-xs bg-[#10241A] border border-green-800 rounded-lg px-4 py-2 text-green-300">
             <span className="flex-1 min-w-[200px]">✓ <span data-testid="notice-text">{n.msg}</span>{n.err && <span className="text-red-300"> {n.err}</span>}</span>
-            {n.hold && n.kind === "deleted" && <button data-testid="notice-restore" disabled={busy} onClick={restore} className="border border-green-700 hover:border-amber-500 text-white px-3 py-1 rounded-md disabled:opacity-50">{busy ? "Restoring..." : "Restore"}</button>}
+            {n.hold && n.kind === "deleted" && <button data-testid="notice-restore" disabled={busy || !canDeleteAt("bronze")} title={canDeleteAt("bronze") ? "" : DELETE_NOTE} onClick={restore} className="border border-green-700 hover:border-amber-500 text-white px-3 py-1 rounded-md disabled:opacity-50">{busy ? "Restoring..." : "Restore"}</button>}
             <button data-testid="notice-dismiss" onClick={() => setN(null)} className="underline text-[#A0A0A0] hover:text-white">Dismiss</button>
           </div>
         );
@@ -1775,7 +2010,7 @@
                     {plan.still_running && <div className="text-red-300">This upload is still being processed. Wait until it finishes.</div>}
                     <div className="flex flex-wrap gap-2 items-center pt-1">
                       <input data-testid="bronze-delete-confirm" aria-label="Type the file name to confirm" value={typed} onChange={(e) => setTyped(e.target.value)} placeholder={"Type " + job.file + " to confirm"} className="bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-xs text-white w-72" />
-                      <button data-testid="bronze-delete-apply" disabled={busy || plan.still_running || typed.trim() !== job.file} onClick={go} className="bg-red-700 hover:bg-red-600 text-white font-bold px-3 py-1 rounded-md disabled:opacity-50">{busy ? "Deleting..." : "Delete everything"}</button>
+                      <button data-testid="bronze-delete-apply" disabled={busy || plan.still_running || typed.trim() !== job.file || !canDeleteAt("bronze")} title={canDeleteAt("bronze") ? "" : DELETE_NOTE} onClick={go} className="bg-red-700 hover:bg-red-600 text-white font-bold px-3 py-1 rounded-md disabled:opacity-50">{busy ? "Deleting..." : "Delete everything"}</button>
                     </div>
                   </div>
                 )}
@@ -1810,7 +2045,7 @@
                 <span className="font-mono text-white">{h.files.join(", ") || "(no file)"}</span>
                 <span className="text-[#808080]">deleted {String(h.deleted_at || "").replace("T", " ").slice(0, 16)} by {h.deleted_by} · {h.days_left} day(s) left</span>
                 <span className="flex-1" />
-                <button data-testid="hold-restore" disabled={!!busy} onClick={() => restore(h)} className="border border-[#3D3D3D] hover:border-amber-500 text-white px-3 py-1 rounded-md disabled:opacity-50">{busy === h.id ? "Restoring..." : "Restore"}</button>
+                <button data-testid="hold-restore" disabled={!!busy || !canDeleteAt("bronze")} title={canDeleteAt("bronze") ? "" : DELETE_NOTE} onClick={() => restore(h)} className="border border-[#3D3D3D] hover:border-amber-500 text-white px-3 py-1 rounded-md disabled:opacity-50">{busy === h.id ? "Restoring..." : "Restore"}</button>
               </div>
             ))}
           </div>
@@ -2113,7 +2348,7 @@
                 {plan && (
                   <div className="flex flex-wrap gap-2 items-center">
                     <input data-testid="gold-remove-confirm" aria-label="Type the table name to confirm" value={typed} onChange={(e) => setTyped(e.target.value)} placeholder={"Type " + dataset + " to confirm"} className="bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-xs text-white w-72" />
-                    <button data-testid="gold-remove-apply" disabled={busy || typed.trim() !== dataset} onClick={go} className="bg-red-700 hover:bg-red-600 text-white font-bold px-3 py-1 rounded-md disabled:opacity-50">{busy ? "Removing..." : "Remove Gold view"}</button>
+                    <button data-testid="gold-remove-apply" disabled={busy || typed.trim() !== dataset || !canDeleteAt("gold")} title={canDeleteAt("gold") ? "" : DELETE_NOTE} onClick={go} className="bg-red-700 hover:bg-red-600 text-white font-bold px-3 py-1 rounded-md disabled:opacity-50">{busy ? "Removing..." : "Remove Gold view"}</button>
                   </div>
                 )}
                 {err && <div data-testid="gold-remove-error" className="text-red-300">{err}</div>}
@@ -2129,7 +2364,20 @@
         const [err, setErr] = useState(null);
         const [busy, setBusy] = useState("");
         const [note, setNote] = useState("");
-        const load = async () => { try { const r = await api({ action: "datasets" }); setRows((r.datasets || []).filter((d) => d.view)); } catch (e) { setErr(e); } };
+        const load = async () => {
+          try {
+            const r = await api({ action: "datasets" });
+            const list = (r.datasets || []).filter((d) => d.view);
+            setRows(list);
+            // v38: once per sign-in, look for amounts that repeat on every line of the same item (a contract value on each invoice line) so totals count them once
+            const key = "c" + (api.__client || "");
+            window.__sammScanned = window.__sammScanned || {};
+            if (!window.__sammScanned[key] && list.some((d) => !d.repeat_checked) && ["engineer", "admin", "system_admin"].includes(window.__sammRole)) {
+              window.__sammScanned[key] = true;
+              try { const sc = await api({ action: "measures_scan" }); if (sc && sc.changed) { const r2 = await api({ action: "datasets" }); setRows((r2.datasets || []).filter((d) => d.view)); } } catch (_) { /* totals still work; the scan can be repeated from the Gold card */ }
+            }
+          } catch (e) { setErr(e); }
+        };
         useEffect(() => { load(); }, [tick]);
         const addLists = async (d) => {
           setBusy(d.dataset); setErr(null); setNote("");
@@ -2162,6 +2410,11 @@
                     <span className="text-white font-semibold">Made of:</span> {d.made_of.files.map((x) => x.title).join(" + ")}
                     {d.made_of.lists.length > 0 && <span> · <span className="text-white font-semibold">linked to:</span> {d.made_of.lists.map((x) => x.title).join(", ")}</span>}
                     {d.made_of.lists.length === 0 && !d.made_of.from_lists && <span className="text-[#808080]"> · not linked to any shared list yet</span>}
+                  </div>
+                )}
+                {d.counted_once && Object.keys(d.counted_once).length > 0 && (
+                  <div data-testid="gold-once" className="text-[11px] text-[#A0A0A0]">
+                    <span className="text-white font-semibold">Counted once:</span> {Object.entries(d.counted_once).map(([c, k]) => c.replace(/_/g, " ") + " (per " + k.replace(/_/g, " ") + ")").join(", ")}. {Object.keys(d.counted_once).length === 1 ? "This amount repeats" : "These amounts repeat"} on every line of the same {Object.values(d.counted_once)[0].replace(/_/g, " ")}, so totals use {Object.keys(d.counted_once).length === 1 ? "it" : "each"} a single time.
                   </div>
                 )}
                 <DatasetTools api={api} dataset={d.dataset} view={d.view} onAsk={onAsk} layer="gold" />
@@ -2258,14 +2511,36 @@
         return { approved, review, more, text };
       }
 
-      function LinkStats({ link }) {
+      // v38: tidy collapsible sections and readable names for the Links tab
+      function nice(name) {
+        let n = String(name == null ? "" : name).replace(/_/g, " ").replace(/\s+/g, " ").trim();
+        const m = n.match(/^(.*?)(?: \(combined\))? · (.+)$/);         // "Landsec combined (combined) · Po Number" -> "Po Number list"
+        if (m) n = m[2] + " list";
+        n = n.replace(/\s*\(combined\)\s*\(combined\)/gi, " (combined)");
+        return n ? n.charAt(0).toUpperCase() + n.slice(1) : n;
+      }
+
+      function Section({ id, title, summary, open, onToggle, children, inner }) {
+        return (
+          <div data-testid={"sec-" + id} className={inner ? "border border-[#262626] rounded-md bg-[#181818]" : "border border-[#2D2D2D] rounded-lg bg-[#1B1B1B]"}>
+            <button data-testid={"sec-toggle-" + id} onClick={onToggle} aria-expanded={!!open} className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs">
+              <span className="text-[#78869b] w-3">{open ? "▾" : "▸"}</span>
+              <span className="text-white font-semibold">{title}</span>
+              {summary ? <span data-testid={"sec-sum-" + id} className="text-[#808080] ml-auto text-[11px]">{summary}</span> : null}
+            </button>
+            {open && <div className="px-3 pb-3 space-y-2">{children}</div>}
+          </div>
+        );
+      }
+
+      function LinkStats({ link, bare }) {
         const st = link.stats; if (!st) return null;
         const pct = Math.round((st.match || 0) * 100);
         return (
           <div data-testid="link-stats" className="mt-2 text-[11px] space-y-1">
             <div className="flex flex-wrap gap-2">
-              <span className={"px-2 py-0.5 rounded-full border " + (st.hint === "strong" ? "border-green-700 text-green-300" : st.hint === "check" ? "border-amber-600 text-amber-300" : "border-red-800 text-red-300")} data-testid="link-match">{pct}% match</span>
-              <span className="px-2 py-0.5 rounded-full border border-[#3D3D3D] text-[#C0C0C0]" data-testid="link-relation">{st.relation}</span>
+              {!bare && <><span className={"px-2 py-0.5 rounded-full border " + (st.hint === "strong" ? "border-green-700 text-green-300" : st.hint === "check" ? "border-amber-600 text-amber-300" : "border-red-800 text-red-300")} data-testid="link-match">{pct}% match</span>
+              <span className="px-2 py-0.5 rounded-full border border-[#3D3D3D] text-[#C0C0C0]" data-testid="link-relation">{st.relation}</span></>}
               <span className="text-[#A0A0A0]">{(st.shared || 0).toLocaleString()} shared value(s) · {(st.orphans_a || 0).toLocaleString()} only in the first · {(st.orphans_b || 0).toLocaleString()} only in the second</span>
             </div>
             {(st.warnings || []).map((w, i) => <div key={i} data-testid="link-warning" className="text-amber-200">⚠ {w}</div>)}
@@ -2289,6 +2564,9 @@
         const [mnote, setMnote] = useState("");
         const [scope, setScope] = useState(null);       // v37: which tables take part in automatic linking
         const [showBad, setShowBad] = useState(false);
+        const [sec, setSec] = useState({ tables: true, link: true, review: true, fit: false, lists: false, drill: true, wrong: false, manual: false });
+        const tog = (k) => setSec((o) => ({ ...o, [k]: !o[k] }));
+        const [det, setDet] = useState({});
         const [man, setMan] = useState({ a: "", ac: "", b: "", bc: "", busy: false, note: "" });
         const loadScope = async () => { try { const r = await api({ action: "links_scope_get" }); setScope(r && Array.isArray(r.tables) ? { ...r, selected: Array.isArray(r.selected) ? r.selected : [] } : null); } catch (e) { setErr(e); } };
         const setTicks = async (list) => {
@@ -2327,7 +2605,7 @@
             await loadModel(); await load();
           } catch (e) { setErr(e); } finally { setBusy(""); }
         };
-        const label = (ds) => ((scope && (scope.tables.find((t) => t.dataset === ds) || {}).label) || (data && data.labels && data.labels[ds]) || String(ds).replace(/^silver_/, ""));
+        const label = (ds) => nice((scope && (scope.tables.find((t) => t.dataset === ds) || {}).label) || (data && data.labels && data.labels[ds]) || String(ds).replace(/^silver_/, ""));
         const load = async () => {
           setBusy("load"); setErr(null);
           try {
@@ -2398,9 +2676,15 @@
             {open && busy === "load" && <div className="text-xs text-[#A0A0A0]">Looking at the columns...</div>}
             {open && data && (
               <div className="space-y-3">
-                <div data-testid="scope-box" className="border border-[#2D2D2D] rounded-lg p-3 bg-[#1B1B1B] text-xs space-y-2">
-                  <div className="text-white font-semibold">1. Choose the tables to link</div>
-                  <div className="text-[#A0A0A0]">Tick the tables or data sources that belong together. "Link automatically" only looks at the ticked tables. New tables start unticked. Links you have already approved keep working if you untick a table.</div>
+                {(() => {
+                  const nApproved = (data.links || []).filter((l) => l.status === "approved").length;
+                  const nOpen = data.candidates.filter((c) => c.status !== "approved" && c.status !== "rejected" && c.stats && c.stats.usable && (!scope || (ticked.includes(c.a.dataset) && ticked.includes(c.b.dataset)))).length;
+                  const nLists = model ? model.combine.length + model.dimensions.length + model.duplicates.length + (model.combined || []).filter((c) => c.undo).length : 0;
+                  return (
+                    <>
+                      <Section id="tables" title="1. Choose the tables to link" summary={scope ? ticked.length + " of " + scope.tables.length + " ticked" : ""} open={sec.tables} onToggle={() => tog("tables")}>
+                  <div data-testid="scope-box" className="text-xs space-y-2">
+                  <div className="text-[#A0A0A0]">Tick the tables that belong together. New tables start unticked. Links you have already approved keep working if you untick a table.</div>
                   {!scope && <div className="text-[#808080]">Loading the tables...</div>}
                   {scope && scope.tables.length === 0 && <div data-testid="scope-empty" className="text-[#808080]">There are no tables yet. Upload data first.</div>}
                   {scope && scope.tables.length > 0 && (
@@ -2416,27 +2700,106 @@
                         return (
                           <div key={g} className="space-y-1">
                             <div className="text-[#808080] uppercase tracking-wide text-[10px]">{title}</div>
-                            {rows.map((t) => (
-                              <label key={t.dataset} data-testid="scope-row" className="flex flex-wrap items-center gap-2 px-2 py-1 border border-[#262626] rounded cursor-pointer hover:border-[#3D3D3D]">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-1">{rows.map((t) => (
+                              <label key={t.dataset} data-testid="scope-row" title={t.dataset} className="flex flex-wrap items-center gap-x-2 px-2 py-1 border border-[#262626] rounded cursor-pointer hover:border-[#3D3D3D]">
                                 <input data-testid="scope-tick" type="checkbox" checked={t.selected} onChange={(e) => setTicks(e.target.checked ? ticked.concat([t.dataset]) : ticked.filter((x) => x !== t.dataset))} />
-                                <span className="text-white font-semibold">{t.label}</span>
+                                <span className="text-white font-semibold">{nice(t.label)}</span>
                                 <span className="text-[#808080]">{t.source === "database" ? "database" : "files"}{t.combined ? " · combined" : ""}{t.links ? " · " + t.links + " approved link(s)" : ""}</span>
                                 {t.new && <span data-testid="scope-new" className="px-1.5 rounded-full border border-amber-600 text-amber-300 text-[10px]">new</span>}
                               </label>
                             ))}
+                            </div>
                           </div>
                         );
                       })}
                     </>
                   )}
                 </div>
+                </Section>
                 {model && mnote && <div data-testid="model-note" className="text-xs text-green-300">{mnote}</div>}
+                <Section id="link" title="2. Link them" summary={prog ? prog : (nApproved + " approved")} open={sec.link} onToggle={() => tog("link")}>
+                  {data.candidates.length === 0 && <div data-testid="links-none" className="text-xs text-[#A0A0A0]">No likely links found. Link finding needs at least two tables with key-like columns such as a code or id.</div>}
+                {(
+                  <div className="flex flex-wrap items-center gap-3 text-xs">
+                    <button data-testid="links-auto" onClick={async () => { setErr(null); try { const r = await autoLinkRun(api, setProg, undefined, !!scope); await load(); setAutoNote(r.text || "No new links to check among the ticked tables."); } catch (e) { setErr(e); setProg(""); } }} disabled={!!prog || (!!scope && ticked.length < 2)} title={scope && ticked.length < 2 ? "Tick at least two tables first" : ""} className="border border-green-700 text-green-300 hover:bg-green-900/30 px-3 py-1 rounded-md disabled:opacity-50">{scope ? "2. Link automatically (" + ticked.length + " ticked)" : "Link automatically"}</button>
+                    <button data-testid="links-check-all" onClick={checkAll} disabled={!!prog || data.candidates.every((c) => c.stats)} className="border border-[#3D3D3D] hover:border-amber-500 text-white px-3 py-1 rounded-md disabled:opacity-50">Check all</button>
+                    {prog && <span data-testid="links-progress" className="text-amber-300">{prog}</span>}
+                    {!prog && autoNote && <span data-testid="links-auto-note" className="text-green-300">{autoNote}</span>}
+                  </div>
+                )}
+                  <Section id="manual" title="Or link two tables yourself" open={sec.manual} onToggle={() => tog("manual")} inner>
+                    <div data-testid="manual-box" className="text-xs space-y-2">
+                  <div className="text-[#A0A0A0]">Pick a table and column on each side. SAMM checks the real values and tells you if the link can be used. Works on any table, ticked or not.</div>
+                  {scope && (
+                    <div className="flex flex-wrap items-center gap-2">
+                      {[["a", "ac"], ["b", "bc"]].map(([k, ck], i) => {
+                        const tb = scope.tables.find((t) => t.dataset === man[k]);
+                        return (
+                          <span key={k} className="flex items-center gap-1">
+                            {i === 1 && <span className="text-[#78869b] mx-1">↔</span>}
+                            <select data-testid={"man-table-" + k} aria-label={i ? "Second table" : "First table"} value={man[k]} onChange={(e) => setMan({ ...man, [k]: e.target.value, [ck]: "", note: "" })} className="bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-white max-w-[200px]">
+                              <option value="">Table</option>{scope.tables.map((t) => <option key={t.dataset} value={t.dataset}>{nice(t.label)}</option>)}
+                            </select>
+                            <select data-testid={"man-col-" + k} aria-label={i ? "Second column" : "First column"} value={man[ck]} onChange={(e) => setMan({ ...man, [ck]: e.target.value, note: "" })} disabled={!tb} className="bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-white font-mono max-w-[180px] disabled:opacity-50">
+                              <option value="">Column</option>{(tb ? tb.columns : []).map((c) => <option key={c} value={c}>{c}</option>)}
+                            </select>
+                          </span>
+                        );
+                      })}
+                      <button data-testid="man-check" onClick={manualCheck} disabled={man.busy || !man.a || !man.b || !man.ac || !man.bc || man.a === man.b} className="border border-[#3D3D3D] hover:border-amber-500 text-white px-3 py-1 rounded-md disabled:opacity-50">{man.busy ? "Checking..." : "Check this link"}</button>
+                    </div>
+                  )}
+                  {man.note && <div data-testid="man-note" className="text-amber-300">{man.note}</div>}
+                </div>
+                  </Section>
+                </Section>
+                <Section id="review" title="3. Review the links" summary={nOpen > 0 ? nOpen + " waiting for you" : "all reviewed"} open={sec.review} onToggle={() => tog("review")}>
+                  {(() => { const w = data.candidates.filter((c) => c.stats && c.status !== "approved" && (c.stats.match || 0) < 0.01).length; return w > 0 ? <button data-testid="weak-toggle" onClick={() => setShowWeak(!showWeak)} className="underline text-[11px] text-[#A0A0A0] hover:text-amber-300 text-left">{showWeak ? "Hide" : "Show"} {w} unlikely link{w === 1 ? "" : "s"} (no values in common)</button> : null; })()}
                 {(() => {
+                  const inScope = (c) => !scope || (ticked.includes(c.a.dataset) && ticked.includes(c.b.dataset)) || c.status !== "new";
+                  const bad = (c) => c.stats && c.status !== "approved" && !c.stats.usable;
+                  const hidden = data.candidates.filter((c) => !inScope(c)).length;
+                  const nbad = data.candidates.filter((c) => inScope(c) && bad(c) && (showWeak || (c.stats.match || 0) >= 0.01)).length;
+                  return (
+                    <div className="flex flex-wrap items-center gap-3 text-[11px] text-[#808080]">
+                      {hidden > 0 && <span data-testid="links-hidden">{hidden} suggestion(s) from tables you have not ticked are hidden.</span>}
+                      {nbad > 0 && <button data-testid="bad-toggle" onClick={() => setShowBad(!showBad)} className="underline hover:text-amber-300">{showBad ? "Hide" : "Show"} {nbad} link(s) that cannot be used</button>}
+                    </div>
+                  );
+                })()}
+                {data.candidates.filter((c) => (!scope || (ticked.includes(c.a.dataset) && ticked.includes(c.b.dataset)) || c.status !== "new") && (showBad || showWeak || !(c.stats && c.status !== "approved" && !c.stats.usable)) && (showWeak || !(c.stats && c.status !== "approved" && (c.stats.match || 0) < 0.01))).map((c) => {
+                  const link = (data.links || []).find((l) => l.id === c.id) || c;
+                  const st = c.stats || link.stats; const done = c.status === "approved"; const showDet = !done || det[c.id];
+                  return (
+                    <div key={c.id} data-testid="link-row" className="border border-[#262626] rounded-md px-3 py-2">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+                        <span className="text-white font-semibold">{nice(c.a_label)}<span className="text-amber-300 font-mono"> · {c.a.column}</span></span>
+                        <span className="text-[#78869b]">↔</span>
+                        <span className="text-white font-semibold">{nice(c.b_label)}<span className="text-amber-300 font-mono"> · {c.b.column}</span></span>
+                        {st && <span data-testid="link-match" className={"px-1.5 rounded-full border text-[10px] " + (st.hint === "strong" ? "border-green-700 text-green-300" : st.hint === "check" ? "border-amber-600 text-amber-300" : "border-red-800 text-red-300")}>{Math.round((st.match || 0) * 100)}% match</span>}
+                        {st && <span data-testid="link-relation" className="px-1.5 rounded-full border border-[#3D3D3D] text-[#C0C0C0] text-[10px]">{st.relation}</span>}
+                        <span data-testid="link-status" className={"ml-auto px-2 py-0.5 rounded-full border text-[10px] " + (c.status === "approved" ? "border-green-700 text-green-300" : c.status === "rejected" ? "border-red-800 text-red-300" : "border-[#3D3D3D] text-[#A0A0A0]")}>{c.status === "new" ? "not checked" : c.status}</span>
+                      </div>
+                      {showDet && <LinkStats link={{ ...link, stats: c.stats || link.stats }} bare />}
+                      <div className="flex flex-wrap items-center gap-2 mt-1.5 text-xs">
+                        <button data-testid="link-check" disabled={busy === c.id} onClick={() => check(c)} className="border border-[#3D3D3D] hover:border-amber-500 text-white px-2 py-0.5 rounded disabled:opacity-50">{c.stats ? "Check again" : "Check"}</button>
+                        {c.stats && c.status !== "approved" && (c.stats.usable
+                          ? <button data-testid="link-approve" disabled={busy === c.id} onClick={() => decide(c, "approve")} className="border border-green-700 text-green-300 hover:bg-green-900/30 px-2 py-0.5 rounded disabled:opacity-50">Approve</button>
+                          : <span data-testid="link-cannot" className="text-[11px] text-[#A0A0A0]">Cannot be approved: {c.stats.relation === "many-to-many" ? "both columns repeat values, so joining would multiply rows. Link through a table that has one row per value." : "no values match."}</span>)}
+                        {c.status === "approved" && (link.auto || c.auto) && <span data-testid="link-auto" className="text-[11px] text-green-300">Approved automatically</span>}
+                        {c.stats && c.status !== "rejected" && <button data-testid="link-reject" disabled={busy === c.id} onClick={() => decide(c, "reject")} className="border border-red-800 text-red-300 hover:bg-red-900/30 px-2 py-0.5 rounded disabled:opacity-50">Reject</button>}
+                        {done && st && <button data-testid="link-details" onClick={() => setDet((d) => ({ ...d, [c.id]: !d[c.id] }))} className="underline text-[11px] text-[#808080] hover:text-amber-300">{det[c.id] ? "Hide details" : "Details"}</button>}
+                      </div>
+                    </div>
+                  );
+                })}
+                </Section>
+                <Section id="fit" title="How your tables fit together" summary={nApproved + " link(s)"} open={sec.fit} onToggle={() => tog("fit")}>
+                  {(() => {
                   const ok = (data.links || []).filter((l) => l.status === "approved" && l.stats && l.stats.parent && l.stats.relation !== "many-to-many");
                   const hs = data.hierarchies || [];
                   return (
-                    <div data-testid="model-summary" className="border border-[#2D2D2D] rounded-lg p-3 bg-[#1B1B1B] text-xs space-y-1">
-                      <div className="text-white font-semibold">How your tables fit together</div>
+                    <div data-testid="model-summary" className="text-xs space-y-1">
                       {ok.length === 0 && <div className="text-[#A0A0A0]">No links are approved yet. When two tables share a code (for example every purchase order row has a property code), SAMM can link them so you can drill down from one to the other. Use "Find links" results below.</div>}
                       {Object.entries(ok.reduce((m, l) => { const ch = l.stats.parent === "a" ? l.b : l.a; (m[ch.dataset] = m[ch.dataset] || []).push(l); return m; }, {})).map(([cds, ls]) => (
                         <div key={cds} data-testid="table-card" className="border border-[#262626] rounded-md px-3 py-2 mb-1 space-y-0.5">
@@ -2452,8 +2815,10 @@
                     </div>
                   );
                 })()}
-                {drill && <DrillView key={drill} api={api} name={drill} onClose={() => setDrill("")} />}
-                {model && (model.combine.length > 0 || model.dimensions.length > 0 || model.duplicates.length > 0 || (model.combined || []).some((c) => c.undo)) && (
+                </Section>
+                <Section id="lists" title="Shared lists and combining" summary={nLists > 0 ? nLists + " suggested" : "none"} open={sec.lists} onToggle={() => tog("lists")}>
+                  {nLists === 0 && <div className="text-xs text-[#808080]">Nothing to suggest right now.</div>}
+                  {model && (model.combine.length > 0 || model.dimensions.length > 0 || model.duplicates.length > 0 || (model.combined || []).some((c) => c.undo)) && (
                   <div data-testid="model-panel" className="space-y-2">
                     <div className="text-xs font-bold text-white">What SAMM can build from your data{model.mode === "auto" ? " (automatic mode builds these for you)" : ""}</div>
                     {(model.combined || []).filter((c) => c.undo).map((c) => (
@@ -2499,76 +2864,10 @@
                     ))}
                   </div>
                 )}
-                {data.candidates.length === 0 && <div data-testid="links-none" className="text-xs text-[#A0A0A0]">No likely links found. Link finding needs at least two tables with key-like columns such as a code or id.</div>}
-                {(
-                  <div className="flex flex-wrap items-center gap-3 text-xs">
-                    <button data-testid="links-auto" onClick={async () => { setErr(null); try { const r = await autoLinkRun(api, setProg, undefined, !!scope); await load(); setAutoNote(r.text || "No new links to check among the ticked tables."); } catch (e) { setErr(e); setProg(""); } }} disabled={!!prog || (!!scope && ticked.length < 2)} title={scope && ticked.length < 2 ? "Tick at least two tables first" : ""} className="border border-green-700 text-green-300 hover:bg-green-900/30 px-3 py-1 rounded-md disabled:opacity-50">{scope ? "2. Link automatically (" + ticked.length + " ticked)" : "Link automatically"}</button>
-                    <button data-testid="links-check-all" onClick={checkAll} disabled={!!prog || data.candidates.every((c) => c.stats)} className="border border-[#3D3D3D] hover:border-amber-500 text-white px-3 py-1 rounded-md disabled:opacity-50">Check all</button>
-                    {prog && <span data-testid="links-progress" className="text-amber-300">{prog}</span>}
-                    {!prog && autoNote && <span data-testid="links-auto-note" className="text-green-300">{autoNote}</span>}
-                  </div>
-                )}
-                <div data-testid="manual-box" className="border border-[#2D2D2D] rounded-lg p-3 bg-[#1B1B1B] text-xs space-y-2">
-                  <div className="text-white font-semibold">Or link two tables yourself</div>
-                  <div className="text-[#A0A0A0]">Pick a table and column on each side. SAMM checks the real values and tells you if the link can be used. Works on any table, ticked or not.</div>
-                  {scope && (
-                    <div className="flex flex-wrap items-center gap-2">
-                      {[["a", "ac"], ["b", "bc"]].map(([k, ck], i) => {
-                        const tb = scope.tables.find((t) => t.dataset === man[k]);
-                        return (
-                          <span key={k} className="flex items-center gap-1">
-                            {i === 1 && <span className="text-[#78869b] mx-1">↔</span>}
-                            <select data-testid={"man-table-" + k} aria-label={i ? "Second table" : "First table"} value={man[k]} onChange={(e) => setMan({ ...man, [k]: e.target.value, [ck]: "", note: "" })} className="bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-white max-w-[200px]">
-                              <option value="">Table</option>{scope.tables.map((t) => <option key={t.dataset} value={t.dataset}>{t.label}</option>)}
-                            </select>
-                            <select data-testid={"man-col-" + k} aria-label={i ? "Second column" : "First column"} value={man[ck]} onChange={(e) => setMan({ ...man, [ck]: e.target.value, note: "" })} disabled={!tb} className="bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-white font-mono max-w-[180px] disabled:opacity-50">
-                              <option value="">Column</option>{(tb ? tb.columns : []).map((c) => <option key={c} value={c}>{c}</option>)}
-                            </select>
-                          </span>
-                        );
-                      })}
-                      <button data-testid="man-check" onClick={manualCheck} disabled={man.busy || !man.a || !man.b || !man.ac || !man.bc || man.a === man.b} className="border border-[#3D3D3D] hover:border-amber-500 text-white px-3 py-1 rounded-md disabled:opacity-50">{man.busy ? "Checking..." : "Check this link"}</button>
-                    </div>
-                  )}
-                  {man.note && <div data-testid="man-note" className="text-amber-300">{man.note}</div>}
-                </div>
-                {(() => { const w = data.candidates.filter((c) => c.stats && c.status !== "approved" && (c.stats.match || 0) < 0.01).length; return w > 0 ? <button data-testid="weak-toggle" onClick={() => setShowWeak(!showWeak)} className="underline text-[11px] text-[#A0A0A0] hover:text-amber-300 text-left">{showWeak ? "Hide" : "Show"} {w} unlikely link{w === 1 ? "" : "s"} (no values in common)</button> : null; })()}
-                {(() => {
-                  const inScope = (c) => !scope || (ticked.includes(c.a.dataset) && ticked.includes(c.b.dataset)) || c.status !== "new";
-                  const bad = (c) => c.stats && c.status !== "approved" && !c.stats.usable;
-                  const hidden = data.candidates.filter((c) => !inScope(c)).length;
-                  const nbad = data.candidates.filter((c) => inScope(c) && bad(c) && (showWeak || (c.stats.match || 0) >= 0.01)).length;
-                  return (
-                    <div className="flex flex-wrap items-center gap-3 text-[11px] text-[#808080]">
-                      {hidden > 0 && <span data-testid="links-hidden">{hidden} suggestion(s) from tables you have not ticked are hidden.</span>}
-                      {nbad > 0 && <button data-testid="bad-toggle" onClick={() => setShowBad(!showBad)} className="underline hover:text-amber-300">{showBad ? "Hide" : "Show"} {nbad} link(s) that cannot be used</button>}
-                    </div>
-                  );
-                })()}
-                {data.candidates.filter((c) => (!scope || (ticked.includes(c.a.dataset) && ticked.includes(c.b.dataset)) || c.status !== "new") && (showBad || showWeak || !(c.stats && c.status !== "approved" && !c.stats.usable)) && (showWeak || !(c.stats && c.status !== "approved" && (c.stats.match || 0) < 0.01))).map((c) => {
-                  const link = (data.links || []).find((l) => l.id === c.id) || c;
-                  return (
-                    <div key={c.id} data-testid="link-row" className="border border-[#2D2D2D] rounded-lg p-3 bg-[#1B1B1B]">
-                      <div className="flex flex-wrap items-center gap-2 text-xs">
-                        <span className="text-white font-semibold">{c.a_label}<span className="text-amber-300 font-mono"> · {c.a.column}</span></span>
-                        <span className="text-[#78869b]">↔</span>
-                        <span className="text-white font-semibold">{c.b_label}<span className="text-amber-300 font-mono"> · {c.b.column}</span></span>
-                        <span data-testid="link-status" className={"ml-auto px-2 py-0.5 rounded-full border text-[10px] " + (c.status === "approved" ? "border-green-700 text-green-300" : c.status === "rejected" ? "border-red-800 text-red-300" : "border-[#3D3D3D] text-[#A0A0A0]")}>{c.status === "new" ? "not checked" : c.status}</span>
-                      </div>
-                      <LinkStats link={{ ...link, stats: c.stats || link.stats }} />
-                      <div className="flex gap-2 mt-2 text-xs">
-                        <button data-testid="link-check" disabled={busy === c.id} onClick={() => check(c)} className="border border-[#3D3D3D] hover:border-amber-500 text-white px-2 py-1 rounded disabled:opacity-50">{c.stats ? "Check again" : "Check"}</button>
-                        {c.stats && c.status !== "approved" && (c.stats.usable
-                          ? <button data-testid="link-approve" disabled={busy === c.id} onClick={() => decide(c, "approve")} className="border border-green-700 text-green-300 hover:bg-green-900/30 px-2 py-1 rounded disabled:opacity-50">Approve</button>
-                          : <span data-testid="link-cannot" className="text-[11px] text-[#A0A0A0] self-center">Cannot be approved: {c.stats.relation === "many-to-many" ? "both columns repeat values, so joining would multiply rows. Link through a table that has one row per value." : "no values match."}</span>)}
-                        {c.status === "approved" && (link.auto || c.auto) && <span data-testid="link-auto" className="text-[11px] text-green-300 self-center">Approved automatically</span>}
-                        {c.stats && c.status !== "rejected" && <button data-testid="link-reject" disabled={busy === c.id} onClick={() => decide(c, "reject")} className="border border-red-800 text-red-300 hover:bg-red-900/30 px-2 py-1 rounded disabled:opacity-50">Reject</button>}
-                      </div>
-                    </div>
-                  );
-                })}
-                <div className="border-t border-[#2D2D2D] pt-3 space-y-2" data-testid="drill-setup">
-                  <div className="text-xs font-bold text-white">Drill-down levels</div>
+                </Section>
+                <Section id="drill" title="Drill-down levels" summary={(data.hierarchies || []).length + " saved"} open={sec.drill} onToggle={() => tog("drill")}>
+                  {drill && <DrillView key={drill} api={api} name={drill} onClose={() => setDrill("")} />}
+                  <div className="space-y-2" data-testid="drill-setup">
                   {(data.hierarchies || []).map((h) => (
                     <div key={h.name} data-testid="drill-saved" className="flex flex-wrap items-center gap-3 text-xs">
                       <span className="text-white font-semibold">{h.name}</span><span className="text-[#A0A0A0]">{(h.labels || h.levels).join(" › ")}</span>
@@ -2591,9 +2890,10 @@
                     </div>
                   )}
                 </div>
+                </Section>
                 {role === "system_admin" && (
-                  <div className="border-t border-[#2D2D2D] pt-3 space-y-2" data-testid="misfile-box">
-                    <div className="text-xs font-bold text-white">Is a table filed under the wrong client? <span className="text-[#78869b] font-normal">(system administrators only)</span></div>
+                  <Section id="wrong" title="Is a table filed under the wrong client?" summary="system administrators only" open={sec.wrong} onToggle={() => tog("wrong")}>
+                  <div className="space-y-2" data-testid="misfile-box">
                     <div className="flex flex-wrap items-center gap-2 text-xs">
                       <select aria-label="Table to check" data-testid="misfile-select" value={mis.ds} onChange={(e) => setMis({ ds: e.target.value, busy: false, msg: "", verdict: undefined, detail: null, flagged: false })} className="bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-white">
                         <option value="">Choose a table</option>{(data.tables || []).map((d) => <option key={d} value={d}>{label(d)}</option>)}
@@ -2610,7 +2910,11 @@
                       </div>
                     )}
                   </div>
+                  </Section>
                 )}
+                    </>
+                  );
+                })()}
               </div>
             )}
           </div>
@@ -3123,7 +3427,7 @@
           const all = Array.from(fileList || []);
           const files = all.filter((f) => DATA_EXT.test(f.name) && !/^(~\$|\.)/.test(f.name));
           const first = all[0] && all[0].webkitRelativePath ? String(all[0].webkitRelativePath).split("/")[0] : "folder";
-          setFolder(all.length ? { name: first, files, skipped: all.length - files.length, client: nowClient() } : null);
+          setFolder(all.length ? { name: first, files, skipped: all.length - files.length, client: nowClient() } : { name: "", files: [], skipped: 0, empty: true, client: nowClient() });
         };
         const startFolder = () => {
           if (!folder || !folder.files.length) return;
@@ -3258,8 +3562,13 @@
                 <input id="onb-folder" data-testid="onb-folder" type="file" multiple webkitdirectory="" directory="" className="hidden" onChange={(e) => { pickFolder(e.target.files); e.target.value = ""; }} /></div>
               {folder && (
                 <div data-testid="folder-card" className="border border-[#3D3D3D] rounded-xl p-4 space-y-3 bg-[#1E1E1E] text-xs">
-                  <div className="text-sm font-semibold text-white">Upload the folder "{folder.name}"</div>
-                  <div className="text-[#C0C0C0]"><span data-testid="folder-count">{folder.files.length} file{folder.files.length === 1 ? "" : "s"}</span> will go to the client <b data-testid="folder-client" className="text-white">{(clientNames || {})[folder.client] || folder.client || "your client"}</b>{folder.skipped > 0 ? ". " + folder.skipped + " other file(s) in the folder are not data files and are left out" : ""}.</div>
+                  {folder.files.length === 0 && (
+                    <div data-testid="folder-empty" className="text-amber-200 bg-[#241E10] border border-amber-800 rounded p-2">
+                      {folder.empty ? "No files were found in that folder. Check that you chose the folder that holds the files, not a folder that only contains other folders that are empty." : "No data files in this folder. SAMM reads csv, tsv, json, jsonl, txt, xlsx and xlsm files." + (folder.skipped > 0 ? " " + folder.skipped + " other file(s) were left out." : "")}
+                    </div>
+                  )}
+                  <div className="text-sm font-semibold text-white">Upload the folder "{folder.name || "(empty)"}"</div>
+                  <div className={folder.files.length ? "text-[#C0C0C0]" : "hidden"}><span data-testid="folder-count">{folder.files.length} file{folder.files.length === 1 ? "" : "s"}</span> will go to the client <b data-testid="folder-client" className="text-white">{(clientNames || {})[folder.client] || folder.client || "your client"}</b>{folder.skipped > 0 ? ". " + folder.skipped + " other file(s) in the folder are not data files and are left out" : ""}.</div>
                   {(clients || []).length > 1 && (
                     <label className="flex flex-wrap items-center gap-2 text-[#C0C0C0]">Client
                       <select data-testid="folder-client-select" aria-label="Client for this folder" value={folder.client || ""} onChange={(e) => setFolder({ ...folder, client: e.target.value })} className="bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-white">
@@ -3527,7 +3836,7 @@
           try {
             const r = await api({ action: "policy_get", tenant_id: t });
             const p = r.policy || {};
-            setPol({ restricted: (p.restricted_columns || []).join(", "), caps: { ...(p.row_caps || {}) }, scan: p.scan_limit_gb == null ? "" : String(p.scan_limit_gb), auto: p.auto_approve_confidence == null ? "" : String(Math.round(p.auto_approve_confidence * 100)), mode: p.mapping_mode || "", pii: !!p.pii_scan, meta: r });
+            setPol({ restricted: (p.restricted_columns || []).join(", "), caps: { ...(p.row_caps || {}) }, scan: p.scan_limit_gb == null ? "" : String(p.scan_limit_gb), auto: p.auto_approve_confidence == null ? "" : String(Math.round(p.auto_approve_confidence * 100)), mode: p.mapping_mode || "", pii: !!p.pii_scan, del: { bronze: "engineer", silver: "engineer", gold: "engineer", ...(p.delete_roles || {}) }, meta: r });
             setPolMsg("");
           } catch (e) { fail(e); }
         };
@@ -3559,7 +3868,7 @@
           try {
             const caps = {};
             Object.keys(pol.caps).forEach((r) => { if (pol.caps[r] !== "" && pol.caps[r] != null) caps[r] = Number(pol.caps[r]); });
-            await api({ action: "policy_save", tenant_id: policyTenant, policy: { restricted_columns: pol.restricted, row_caps: caps, scan_limit_gb: pol.scan === "" ? null : Number(pol.scan), auto_approve_confidence: pol.auto === "" ? null : Number(pol.auto), mapping_mode: pol.mode || null, pii_scan: !!pol.pii } });
+            await api({ action: "policy_save", tenant_id: policyTenant, policy: { restricted_columns: pol.restricted, row_caps: caps, scan_limit_gb: pol.scan === "" ? null : Number(pol.scan), auto_approve_confidence: pol.auto === "" ? null : Number(pol.auto), mapping_mode: pol.mode || null, pii_scan: !!pol.pii, delete_roles: pol.del } });
             setPolMsg("Saved. It applies to the next request.");
           } catch (e) { fail(e); } finally { setBusy(false); }
         };
@@ -3731,6 +4040,20 @@
                     <input aria-label="Auto-approve level" type="number" min="50" max="100" value={pol.auto} onChange={(e) => setPol({ ...pol, auto: e.target.value })} className={inp} placeholder="90 (default)" />
                     <span className="text-[10px] text-[#707070]">When a file arrives, SAMM maps fields it is at least this sure about on its own. Anything lower waits for a Data Engineer. Fields a person approved before are reused.</span>
                   </label>
+                  <div data-testid="delete-perms" className="border border-[#2D2D2D] rounded-lg p-3 space-y-2 max-w-xl">
+                    <div className="text-white font-semibold">Who may delete</div>
+                    <div className="text-[10px] text-[#707070]">Choose the lowest role that may delete at each layer. Looking at what a delete would remove is always allowed. Putting a deleted file back (Restore) needs the Bronze permission.</div>
+                    {[["bronze", "Bronze (uploaded files)"], ["silver", "Silver (tables, and removing duplicate rows)"], ["gold", "Gold (views)"]].map(([layer, title]) => (
+                      <label key={layer} className="flex flex-wrap items-center gap-2 text-[#A0A0A0]">
+                        <span className="w-64">{title}</span>
+                        <select aria-label={"Who may delete in " + layer} value={(pol.del || {})[layer] || "engineer"} onChange={(e) => setPol({ ...pol, del: { ...(pol.del || {}), [layer]: e.target.value } })} className={inp}>
+                          <option value="engineer">Data Engineer and above (default)</option>
+                          <option value="admin">Administrator and above</option>
+                          <option value="system_admin">System administrator only</option>
+                        </select>
+                      </label>
+                    ))}
+                  </div>
                   <div className="flex items-center gap-3">
                     <button onClick={savePolicy} disabled={busy} className={btn}>Save policy</button>
                     {polMsg && <span data-testid="policy-saved" className="text-green-400">{polMsg}</span>}
@@ -3839,7 +4162,7 @@
         }, [messages, isLoading]);
 
         const isRV = role === "report_viewer";
-        useEffect(() => { window.__sammRole = role; }, [role]);
+        useEffect(() => { window.__sammRole = role; window.__sammCanDelete = (identity && identity.can_delete) || null; }, [role, identity]);
         useEffect(() => { if (isRV && activeTab !== "dashboard") setActiveTab("dashboard"); }, [isRV, activeTab]);
         const canOnboard = CAN_ONBOARD.includes(role);
         const canGovern = CAN_GOVERN.includes(role);
@@ -4006,102 +4329,104 @@
         };
 
         const navClass = (tab, disabled) =>
-          "w-full text-left flex items-center space-x-3 px-4 py-3 rounded-lg text-sm font-medium transition " +
-          (activeTab === tab
-            ? "bg-[#2D2D2D] text-white border-l-4 border-amber-500"
-            : disabled
-            ? "text-[#555555] cursor-not-allowed"
-            : "text-[#A0A0A0] hover:bg-[#252525] hover:text-white");
+          "navbtn w-full text-left flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition" + (activeTab === tab ? " on" : "");
+        const PAGE_TITLES = { chat: "Ask SAMM", dashboard: "Reports", myviews: "My views", onboarding: "Onboarding", governance: "Authorizations" };
+        const [uiTheme, flipTheme] = useTheme();
 
         const splitLabel = split ? (split.reportId && openReport ? openReport.title : friendlyView(split.view || split.dataset, acting || identity.tenant_id)) : "";
         return (
           <SplitCtx.Provider value={{ open: !!split && activeTab !== "chat", dataset: split ? split.dataset : "", view: split ? split.view : "", reportId: split ? split.reportId : "", live }}>
           <div className="flex h-screen bg-[#191919] text-[#E3E3E3] font-sans overflow-hidden w-full">
             {/* LEFT SIDEBAR PANEL */}
-            <div className="w-64 bg-[#202020] border-r border-[#2D2D2D] flex flex-col justify-between flex-shrink-0">
+            <div data-testid="sidebar" className="samm-side w-64 border-r flex flex-col justify-between flex-shrink-0">
               <div>
-                <div className="p-5 flex items-center space-x-3 border-b border-[#2D2D2D]">
-                  <div className="bg-amber-600 px-3 py-1 rounded-lg text-white font-bold text-sm">SAMM</div>
+                <div className="px-5 py-5 flex items-center gap-3">
+                  <SammMark size={32} />
                   <div>
-                    <h1 className="font-bold text-base text-white tracking-wide">SAMM AI</h1>
-                    <p className="text-[10px] text-amber-500 font-mono">Data intelligence</p>
+                    <h1 className="font-semibold text-base text-white tracking-tight leading-tight">SAMM AI</h1>
+                    <p className="text-[11px] side-muted leading-tight">Data intelligence</p>
                   </div>
                 </div>
                 {!demo && (
                   <div data-testid="client-box" className="px-4 pt-4">
-                    <div className="text-[10px] uppercase tracking-wider text-[#808080] font-mono mb-1">Client</div>
+                    <div className="text-[10px] uppercase tracking-wider side-label font-semibold mb-1">Client</div>
                     {clients.length > 1 ? (
-                      <select data-testid="client-switch" aria-label="Client" value={acting} onChange={(e) => switchClient(e.target.value)} className="w-full bg-[#2D2D2D] border border-[#3D3D3D] rounded-md px-2 py-2 text-sm text-white focus:outline-none focus:border-amber-500">
+                      <select data-testid="client-switch" aria-label="Client" value={acting} onChange={(e) => switchClient(e.target.value)} className="w-full border rounded-md px-2 py-2 text-sm text-white focus:outline-none">
                         {clients.map((c) => <option key={c} value={c}>{cname(c)}</option>)}
                       </select>
                     ) : (
-                      <div data-testid="client-fixed" className="w-full bg-[#2D2D2D] border border-[#3D3D3D] rounded-md px-2 py-2 text-sm text-white">{cname(acting || identity.tenant_id)}</div>
+                      <div data-testid="client-fixed" className="side-field w-full border rounded-md px-2 py-2 text-sm text-white">{cname(acting || identity.tenant_id)}</div>
                     )}
                   </div>
                 )}
-                <nav className="p-4 space-y-2">
-                  {!isRV && <button onClick={() => setActiveTab("chat")} className={navClass("chat", false)}>
-                    <span>💬 Ask SAMM</span>
+                <nav className="p-4 space-y-1">
+                  <div className="text-[10px] uppercase tracking-wider side-label font-semibold px-2 pt-1 pb-1">User</div>
+                  {!isRV && <button data-testid="nav-chat" onClick={() => setActiveTab("chat")} className={navClass("chat", false)}>
+                    <Icon name="chat" /><span>Ask SAMM</span>
                   </button>}
                   <button data-testid="nav-dashboard" onClick={() => setActiveTab("dashboard")} className={navClass("dashboard", false)}>
-                    <span>📊 Reports{tiles.length ? " (" + tiles.length + ")" : ""}</span>
+                    <Icon name="reports" /><span>Reports{tiles.length ? " (" + tiles.length + ")" : ""}</span>
                   </button>
                   {!isRV && <button data-testid="nav-myviews" onClick={() => canGold && setActiveTab("myviews")} disabled={!canGold} title={canGold ? "" : "Requires Analyst or above"} className={navClass("myviews", !canGold)}>
-                    <span>🗂️ My views</span>
+                    <Icon name="views" /><span>My views</span>
                   </button>}
                   {!isRV && <button
+                    data-testid="nav-onboarding"
                     onClick={() => canOnboard && setActiveTab("onboarding")}
                     disabled={!canOnboard}
                     title={canOnboard ? "" : "Requires Data Engineer or above"}
                     className={navClass("onboarding", !canOnboard)}
                   >
-                    <span>📦 Onboarding</span>
+                    <Icon name="onboarding" /><span>Onboarding</span>
                   </button>}
+                  {!isRV && <div className="text-[10px] uppercase tracking-wider side-label font-semibold px-2 pt-4 pb-1">Administrator</div>}
                   {!isRV && <button
+                    data-testid="nav-governance"
                     onClick={() => canGovern && setActiveTab("governance")}
                     disabled={!canGovern}
                     title={canGovern ? "" : "Requires a Client or System Administrator"}
                     className={navClass("governance", !canGovern)}
                   >
-                    <span>🛡️ Authorizations</span>
+                    <Icon name="auth" /><span>Authorizations</span>
                   </button>}
                 </nav>
               </div>
-              <div className="p-4 border-t border-[#2D2D2D] bg-[#1E1E1E]">
-                <div className="text-xs text-[#A0A0A0] mb-2"><span>🛡️ Identity Firewall</span></div>
+              <div className="p-4 border-t" style={{ borderColor: "var(--side-line)" }}>
+                <div className="text-[10px] uppercase tracking-wider side-label font-semibold mb-2">Signed in</div>
                 {demo ? (
                   <>
                     <select
                       aria-label="Preview role"
                       value={previewRole}
                       onChange={(e) => setPreviewRole(e.target.value)}
-                      className="w-full bg-[#2D2D2D] border border-[#3D3D3D] rounded-md py-1.5 px-3 text-xs text-white focus:outline-none focus:border-amber-500 font-mono cursor-pointer"
+                      className="w-full border rounded-md py-1.5 px-3 text-xs text-white focus:outline-none font-mono cursor-pointer"
                     >
                       {Object.keys(ROLE_LABELS).map((r) => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
                     </select>
-                    <p className="text-[10px] text-[#707070] mt-2 leading-snug">Demo preview only. In live mode your role comes from the server.</p>
+                    <p className="text-[10px] side-muted mt-2 leading-snug">Demo preview only. In live mode your role comes from the server.</p>
                   </>
                 ) : (
                   <div className="text-xs font-mono space-y-1">
                     <div data-testid="who-role" className="text-white">{ROLE_LABELS[identity.role] || identity.role}</div>
-                    <div className="text-[#A0A0A0] truncate" title={identity.email}>{identity.email}</div>
-                    <div data-testid="who-version" className="text-[#707070]">Server {identity.version || "older than v35 - redeploy the backend"} · Screen v35</div>
-                    <button onClick={onSignOut} className="mt-2 text-[#A0A0A0] hover:text-white underline">Sign out</button>
+                    <div className="side-muted truncate" title={identity.email}>{identity.email}</div>
+                    <div data-testid="who-version" className="side-muted opacity-80">Server {identity.version || "older than v35 - redeploy the backend"} · Screen v39</div>
+                    <button onClick={onSignOut} className="mt-2 side-muted hover-w underline">Sign out</button>
                   </div>
                 )}
-                {demo && <button onClick={onSignOut} className="mt-2 text-xs text-[#A0A0A0] hover:text-white underline">Exit demo</button>}
+                {demo && <button onClick={onSignOut} className="mt-2 text-xs side-muted hover-w underline">Exit demo</button>}
               </div>
             </div>
 
             {/* CENTRAL INTERACTIVE CHAT ENGINE FEED */}
             <div className="flex-1 flex flex-col min-w-0 bg-[#191919]">
               <header className="h-16 border-b border-[#2D2D2D] px-6 flex items-center justify-between bg-[#1A1A1A]">
-                <div className="flex items-center space-x-3">
-                  <span data-testid="client-chip" className="text-xs bg-[#2D2D2D] text-amber-500 font-mono px-2.5 py-1 rounded border border-[#3D3D3D]">{demo ? "Demo" : cname(acting || identity.tenant_id)}</span>
+                <div className="flex items-center space-x-3 min-w-0">
+                  <h2 data-testid="page-title" className="samm-page-title truncate">{PAGE_TITLES[activeTab] || "SAMM"}</h2>
+                  <span data-testid="client-chip" className="text-xs bg-[#2D2D2D] text-amber-500 font-medium px-2.5 py-1 rounded-md border border-[#3D3D3D]">{demo ? "Demo" : cname(acting || identity.tenant_id)}</span>
                   {demo && <SimBadge>Demo mode: simulated</SimBadge>}
                 </div>
-                <div className="flex items-center space-x-4 text-xs font-mono text-[#A0A0A0]">
-                  <span>👤 {String(role).toUpperCase()}</span>
+                <div className="flex items-center space-x-3 text-xs text-[#A0A0A0]">
+                  <span className="hidden md:inline font-medium">{ROLE_LABELS[role] || String(role)}</span>
                   {!demo && views.length > 1 && (
                     <label className="flex items-center space-x-1">
                       <span>Dataset</span>
@@ -4110,7 +4435,7 @@
                         data-testid="dataset-select"
                         value={activeView || defaultView}
                         onChange={(e) => setActiveView(e.target.value)}
-                        className="bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-xs text-white font-mono max-w-[220px] focus:outline-none focus:border-amber-500"
+                        className="bg-[#2D2D2D] border border-[#3D3D3D] rounded-md px-2 py-1.5 text-xs text-white max-w-[220px] focus:outline-none focus:border-amber-500"
                       >
                         {views.map((v) => <option key={v.name} value={v.name} title={v.name}>{friendlyView(v.name, acting || identity.tenant_id)}</option>)}
                       </select>
@@ -4119,10 +4444,11 @@
                   <button
                     onClick={() => setPanelOpen((o) => !o)}
                     data-testid="panel-toggle"
-                    className="border border-[#3D3D3D] rounded px-2 py-1 hover:text-white hover:border-amber-500"
+                    className="border border-[#3D3D3D] rounded-md px-3 h-[34px] inline-flex items-center gap-2 hover:text-white hover:border-amber-500 bg-[#222222]"
                   >
-                    📄 Files {artifacts.length > 0 ? "(" + artifacts.length + ")" : ""}
+                    <Icon name="files" size={15} /> Files {artifacts.length > 0 ? "(" + artifacts.length + ")" : ""}
                   </button>
+                  <ThemeToggle />
                 </div>
               </header>
 
@@ -4333,11 +4659,13 @@
           } catch (e) { setErr(e); setBusy(false); }
         };
         return (
-          <div className="min-h-screen flex items-center justify-center bg-[#191919] p-4">
-            <div data-testid="invite-landing" className="w-full max-w-md bg-[#222222] border border-[#2D2D2D] rounded-xl p-6 shadow-xl space-y-4">
-              <div className="flex items-center space-x-3 border-b border-[#2D2D2D] pb-4">
-                <div className="bg-amber-600 px-3 py-1 rounded-lg text-white font-bold text-sm">SAMM</div>
-                <div><h1 className="font-bold text-base text-white tracking-wide">You have been invited</h1><p className="text-[10px] text-amber-500 font-mono">One-time link</p></div>
+          <div className="min-h-screen flex items-center justify-center samm-login-bg p-4 relative">
+            <div className="absolute top-4 right-4"><ThemeToggle /></div>
+            <div data-testid="invite-landing" className="w-full max-w-md samm-login-card p-8 space-y-4">
+              <div className="flex flex-col items-center text-center space-y-2 pb-2">
+                <SammMark size={44} />
+                <h1 className="font-semibold text-xl text-white tracking-tight">You have been invited</h1>
+                <p className="text-xs text-[#A0A0A0]">One-time link</p>
               </div>
               {!info && !err && <div className="text-xs text-[#A0A0A0]">Checking your invitation...</div>}
               {info && (
@@ -4372,7 +4700,7 @@
           callBackend(d.url, d.token, { action: "whoami" }).then((who) => setSession({ url: d.url, token: d.token, identity: who })).catch(() => rememberClear()).finally(() => setChecking(false));
         }, []);
         if (demo) return <SammConsole demo={true} onSignOut={() => setDemo(false)} />;
-        if (checking) return <div className="min-h-screen flex items-center justify-center bg-[#191919] text-xs text-[#A0A0A0]">Signing you in...</div>;
+        if (checking) return <div className="min-h-screen flex items-center justify-center samm-login-bg text-xs text-[#A0A0A0]">Signing you in...</div>;
         if (invite && !session) return <InviteLanding code={invite.code} api={invite.api} onDone={(s) => { setInvite(null); setSession(s); }} onSkip={() => setInvite(null)} />;
         if (!session) {
           return <SignIn defaultUrl={API_URL} onSignedIn={setSession} onDemo={() => setDemo(true)} />;
