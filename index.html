@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <!-- SAMM screen v40 -->
+    <!-- SAMM screen v42 -->
     <title>⚙️ SAMM Core AI Platform</title>
     <!-- React core (pinned, production builds) -->
     <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin></script>
@@ -137,6 +137,8 @@
       .samm-login-bg { background: var(--bg); }
       .samm-login-card { background: var(--card); border:1px solid var(--line); border-radius:14px; box-shadow: 0 10px 30px rgba(10,20,50,.18); }
       html[data-theme="light"] .samm-login-card { background:#fff; }
+      html body .samm-login-card button[type="submit"] { background:#5fe38d; color:#0A1633; font-weight:700; letter-spacing:.04em; }
+      html body .samm-login-card button[type="submit"]:hover { background:#7aeda0; }
     </style>
   </head>
   <body style="margin: 0; padding: 0;">
@@ -1008,34 +1010,59 @@
           </div>
         );
       }
-      function HeroWave() {
-        const lines = [];
-        for (let k = 0; k < 14; k++) {
-          let d = "";
-          for (let x = 0; x <= 600; x += 10) {
-            const y = 120 + k * 7 + Math.sin(x / 55 + k * 0.35) * (26 - k) + Math.sin(x / 23 + k) * 5;
-            d += (x === 0 ? "M" : "L") + x + " " + y.toFixed(1);
-          }
-          lines.push(<path key={k} d={d} fill="none" stroke={k % 5 === 0 ? "#e9a84a" : "#4c8dff"} strokeOpacity={0.15 + k * 0.035} strokeWidth="1" />);
-        }
-        return <svg viewBox="0 0 600 260" className="w-full" aria-hidden="true">{lines}</svg>;
+      function HeroDiagram() {
+        const G = "#5fe38d", L = "#2b4a7a", T = "#dfe8f7";
+        const box = (x, y, w, h, title, sub, active) => (
+          <g key={title}>
+            <rect x={x} y={y} width={w} height={h} rx="4" fill="#0e2147" stroke={active ? G : "#3a5a8c"} strokeWidth="1" />
+            <text x={x + 8} y={y + 14} fontSize="9" fontWeight="600" fill={T}>{title}</text>
+            <text x={x + 8} y={y + 26} fontSize="7" fill="#7f96bd">{sub}</text>
+          </g>
+        );
+        const card = (x, y, w, h) => (
+          <g key={x + "-" + y}><rect x={x} y={y} width={w} height={h} rx="4" fill="#0e2147" stroke="#2b4a7a" /><line x1={x + 8} x2={x + w - 8} y1={y + h / 2 - 4} y2={y + h / 2 - 4} stroke="#4f6fa3" /><line x1={x + 8} x2={x + w * 0.6} y1={y + h / 2 + 4} y2={y + h / 2 + 4} stroke="#4f6fa3" /></g>
+        );
+        return (
+          <svg viewBox="0 0 560 230" className="w-full" aria-hidden="true" data-testid="hero-diagram">
+            <text x="280" y="16" textAnchor="middle" fontSize="13" fill={T}>Then builds everything it powers.</text>
+            <rect x="8" y="40" width="70" height="46" rx="4" fill="#0e2147" stroke="#2b4a7a" />
+            <rect x="20" y="62" width="6" height="16" fill={G} /><rect x="32" y="56" width="6" height="22" fill={G} /><rect x="44" y="50" width="6" height="28" fill={G} />
+            <polyline points="54,70 62,62 72,58" fill="none" stroke={G} />
+            <text x="43" y="104" textAnchor="middle" fontSize="11" fill={T}>Dashboards</text>
+            {box(200, 60, 120, 32, "Bronze", "Raw data", false)}
+            {box(200, 100, 120, 32, "Silver", "Cleaned data", false)}
+            {box(200, 140, 120, 32, "Gold", "Business-ready", true)}
+            <path d="M260 92 V100 M260 132 V140" stroke={L} fill="none" />
+            <path d="M200 156 H150 V63 H78" stroke={L} fill="none" /><circle cx="78" cy="63" r="2" fill={G} />
+            <path d="M320 156 H345 V70 H380" stroke={L} fill="none" /><circle cx="380" cy="70" r="2" fill={G} />
+            <path d="M345 156 H400" stroke={L} fill="none" /><circle cx="400" cy="156" r="2" fill={G} />
+            <path d="M260 172 V200 H230" stroke={L} fill="none" />
+            {card(400, 44, 70, 22)}{card(400, 70, 70, 22)}
+            <text x="450" y="112" textAnchor="middle" fontSize="11" fill={T}>AI Agents</text>
+            {card(400, 140, 70, 28)}
+            <text x="440" y="190" textAnchor="middle" fontSize="11" fill={T}>Ask a question</text>
+            <circle cx="215" cy="200" r="3" fill="none" stroke={G} />
+            <text x="260" y="222" textAnchor="middle" fontSize="11" fill={T}>Automations</text>
+          </svg>
+        );
       }
       function AuthShell({ children, testid }) {
         return (
           <div data-testid={testid} className="min-h-screen flex samm-login-bg relative">
             <div className="absolute top-4 right-4 z-10"><ThemeToggle /></div>
-            <div className="hidden md:flex flex-1 flex-col justify-between p-12" style={{ color: "#fff", background: "linear-gradient(160deg,#061029 0%,#0a1b3d 60%,#0b2350 100%)" }}>
-              <div className="flex items-center gap-3 text-[11px] tracking-[0.25em] uppercase" style={{ color: "#9fb4e6" }}>
-                <span className="inline-flex gap-1"><i className="w-2 h-2 inline-block" style={{ background: "#2f6df6" }} /><i className="w-2 h-2 inline-block" style={{ background: "#5b8dee" }} /><i className="w-2 h-2 inline-block border" style={{ borderColor: "#5b8dee" }} /></span>
-                Bronze · Silver · Gold
+            <div data-testid="hero-panel" className="hidden md:flex flex-[1.5] flex-col justify-between px-12 py-8" style={{ background: "#0A1633", color: "#fff" }}>
+              <div className="flex items-center"><img src={DATORE_LOGO} alt="Datore" className="h-10 rounded" /></div>
+              <div className="max-w-xl">
+                <h2 data-testid="hero-headline" className="font-medium leading-[1.1]" style={{ color: "#5fe38d", fontSize: "clamp(34px, 4vw, 54px)" }}>&lsquo;We need to do more with data &amp; AI&rsquo;</h2>
+                <p className="mt-5 text-[15px] leading-relaxed" style={{ color: "#dfe8f7" }}>The problem? Your data is a mess, technology is moving at lightning pace, there&rsquo;s no budget, no in-house skills and no one can even articulate the return on investment - sound like your board meeting?</p>
+                <div className="mt-6 flex flex-wrap gap-3">
+                  <a href="https://www.datore.co.uk/" target="_blank" rel="noopener noreferrer" className="px-5 py-3 text-xs font-bold tracking-[0.15em] uppercase rounded-sm" style={{ background: "#5fe38d", color: "#0A1633", textDecoration: "none" }}>Book a call</a>
+                  <a href="https://www.datore.co.uk/" target="_blank" rel="noopener noreferrer" className="px-5 py-3 text-xs font-bold tracking-[0.15em] uppercase rounded-sm border" style={{ borderColor: "#3a5a8c", color: "#fff", textDecoration: "none" }}>See how it works</a>
+                </div>
               </div>
-              <div className="max-w-md">
-                <h2 className="text-4xl font-bold leading-tight" style={{ color: "#fff" }}>Ask your data.<br /><span style={{ color: "#e9a84a" }}>Trust the answer.</span></h2>
-                <p className="mt-5 text-sm leading-relaxed" style={{ color: "#aab9dd" }}>Bronze, Silver and Gold data, linked and governed, answered in plain language. Every number comes from your trusted data and follows your access limits.</p>
-              </div>
-              <div><HeroWave /></div>
+              <div className="max-w-xl"><HeroDiagram /></div>
             </div>
-            <div className="flex-1 flex flex-col items-center justify-center p-6 md:max-w-[560px] w-full">
+            <div className="flex-1 flex flex-col items-center justify-center p-6 md:max-w-[520px] w-full">
               <div className="w-full max-w-md flex-1 flex flex-col justify-center">{children}</div>
               <div className="pt-6"><PoweredBy /></div>
             </div>
@@ -3879,7 +3906,7 @@
           try {
             const r = await api({ action: "policy_get", tenant_id: t });
             const p = r.policy || {};
-            setPol({ restricted: (p.restricted_columns || []).join(", "), caps: { ...(p.row_caps || {}) }, scan: p.scan_limit_gb == null ? "" : String(p.scan_limit_gb), auto: p.auto_approve_confidence == null ? "" : String(Math.round(p.auto_approve_confidence * 100)), mode: p.mapping_mode || "", pii: !!p.pii_scan, del: { bronze: "engineer", silver: "engineer", gold: "engineer", ...(p.delete_roles || {}) }, meta: r });
+            setPol({ restricted: (p.restricted_columns || []).join(", "), caps: { ...(p.row_caps || {}) }, scan: p.scan_limit_gb == null ? "" : String(p.scan_limit_gb), auto: p.auto_approve_confidence == null ? "" : String(Math.round(p.auto_approve_confidence * 100)), mode: p.mapping_mode || "", pii: !!p.pii_scan, lang: !!p.language_layer, del: { bronze: "engineer", silver: "engineer", gold: "engineer", ...(p.delete_roles || {}) }, meta: r });
             setPolMsg("");
           } catch (e) { fail(e); }
         };
@@ -3911,7 +3938,7 @@
           try {
             const caps = {};
             Object.keys(pol.caps).forEach((r) => { if (pol.caps[r] !== "" && pol.caps[r] != null) caps[r] = Number(pol.caps[r]); });
-            await api({ action: "policy_save", tenant_id: policyTenant, policy: { restricted_columns: pol.restricted, row_caps: caps, scan_limit_gb: pol.scan === "" ? null : Number(pol.scan), auto_approve_confidence: pol.auto === "" ? null : Number(pol.auto), mapping_mode: pol.mode || null, pii_scan: !!pol.pii, delete_roles: pol.del } });
+            await api({ action: "policy_save", tenant_id: policyTenant, policy: { restricted_columns: pol.restricted, row_caps: caps, scan_limit_gb: pol.scan === "" ? null : Number(pol.scan), auto_approve_confidence: pol.auto === "" ? null : Number(pol.auto), mapping_mode: pol.mode || null, pii_scan: !!pol.pii, language_layer: !!pol.lang, delete_roles: pol.del } });
             setPolMsg("Saved. It applies to the next request.");
           } catch (e) { fail(e); } finally { setBusy(false); }
         };
@@ -4070,6 +4097,11 @@
                     <input aria-label="Personal data scan" type="checkbox" checked={!!pol.pii} onChange={(e) => setPol({ ...pol, pii: e.target.checked })} />
                     Scan new files for personal data (names, emails, phone numbers) when mapping
                     <span className="text-[10px] text-[#707070]">Uses Amazon Comprehend (about $0.0001 per 100 characters scanned, a few text columns per file). It only suggests restricting a column; it never restricts one by itself.</span>
+                  </label>
+                  <label className="flex items-center gap-2 text-[#A0A0A0]">
+                    <input aria-label="Language layer" data-testid="pol-language" type="checkbox" checked={!!pol.lang} onChange={(e) => setPol({ ...pol, lang: e.target.checked })} />
+                    Use the language layer (Ollama) for questions SAMM does not understand
+                    <span className="text-[10px] text-[#707070]" data-testid="pol-language-note">{pol.meta.language_configured ? "A language server is set up. It only rewrites the question; it never sees your data, and SAMM still builds and checks the answer." : "No language server is set up yet, so this switch has no effect until one is added at deploy time."}</span>
                   </label>
                   <label className="flex flex-col gap-1 text-[#A0A0A0] max-w-xs">How new files are mapped
                     <select aria-label="Mapping mode" value={pol.mode} onChange={(e) => setPol({ ...pol, mode: e.target.value })} className={inp}>
@@ -4452,7 +4484,7 @@
                   <div className="text-xs font-mono space-y-1">
                     <div data-testid="who-role" className="text-white">{ROLE_LABELS[identity.role] || identity.role}</div>
                     <div className="side-muted truncate" title={identity.email}>{identity.email}</div>
-                    <div data-testid="who-version" className="side-muted opacity-80">Server {identity.version || "older than v35 - redeploy the backend"} · Screen v40</div>
+                    <div data-testid="who-version" className="side-muted opacity-80">Server {identity.version || "older than v35 - redeploy the backend"} · Screen v42</div>
                     <button onClick={onSignOut} className="mt-2 side-muted hover-w underline">Sign out</button>
                   </div>
                 )}
