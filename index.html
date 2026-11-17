@@ -3,6 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- SAMM screen v40 -->
     <title>⚙️ SAMM Core AI Platform</title>
     <!-- React core (pinned, production builds) -->
     <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin></script>
@@ -999,6 +1000,49 @@
         );
       }
 
+      function PoweredBy() {
+        return (
+          <div data-testid="powered-by" className="flex items-center justify-center gap-2 text-[11px] text-[#A0A0A0]">
+            <span>Powered by</span>
+            <img src={DATORE_LOGO} alt="Datore" className="h-5 rounded" style={{ background: "#13214a" }} />
+          </div>
+        );
+      }
+      function HeroWave() {
+        const lines = [];
+        for (let k = 0; k < 14; k++) {
+          let d = "";
+          for (let x = 0; x <= 600; x += 10) {
+            const y = 120 + k * 7 + Math.sin(x / 55 + k * 0.35) * (26 - k) + Math.sin(x / 23 + k) * 5;
+            d += (x === 0 ? "M" : "L") + x + " " + y.toFixed(1);
+          }
+          lines.push(<path key={k} d={d} fill="none" stroke={k % 5 === 0 ? "#e9a84a" : "#4c8dff"} strokeOpacity={0.15 + k * 0.035} strokeWidth="1" />);
+        }
+        return <svg viewBox="0 0 600 260" className="w-full" aria-hidden="true">{lines}</svg>;
+      }
+      function AuthShell({ children, testid }) {
+        return (
+          <div data-testid={testid} className="min-h-screen flex samm-login-bg relative">
+            <div className="absolute top-4 right-4 z-10"><ThemeToggle /></div>
+            <div className="hidden md:flex flex-1 flex-col justify-between p-12" style={{ color: "#fff", background: "linear-gradient(160deg,#061029 0%,#0a1b3d 60%,#0b2350 100%)" }}>
+              <div className="flex items-center gap-3 text-[11px] tracking-[0.25em] uppercase" style={{ color: "#9fb4e6" }}>
+                <span className="inline-flex gap-1"><i className="w-2 h-2 inline-block" style={{ background: "#2f6df6" }} /><i className="w-2 h-2 inline-block" style={{ background: "#5b8dee" }} /><i className="w-2 h-2 inline-block border" style={{ borderColor: "#5b8dee" }} /></span>
+                Bronze · Silver · Gold
+              </div>
+              <div className="max-w-md">
+                <h2 className="text-4xl font-bold leading-tight" style={{ color: "#fff" }}>Ask your data.<br /><span style={{ color: "#e9a84a" }}>Trust the answer.</span></h2>
+                <p className="mt-5 text-sm leading-relaxed" style={{ color: "#aab9dd" }}>Bronze, Silver and Gold data, linked and governed, answered in plain language. Every number comes from your trusted data and follows your access limits.</p>
+              </div>
+              <div><HeroWave /></div>
+            </div>
+            <div className="flex-1 flex flex-col items-center justify-center p-6 md:max-w-[560px] w-full">
+              <div className="w-full max-w-md flex-1 flex flex-col justify-center">{children}</div>
+              <div className="pt-6"><PoweredBy /></div>
+            </div>
+          </div>
+        );
+      }
+
       function SimBadge({ children }) {
         return (
           <span className="text-xs uppercase bg-amber-900/40 text-amber-400 font-mono px-2.5 py-1 rounded border border-amber-700">
@@ -1038,9 +1082,8 @@
         };
 
         return (
-          <div className="min-h-screen flex items-center justify-center samm-login-bg p-4 relative">
-            <div className="absolute top-4 right-4"><ThemeToggle /></div>
-            <form onSubmit={submit} className="w-full max-w-md samm-login-card p-8 space-y-4">
+          <AuthShell testid="signin-shell">
+            <form onSubmit={submit} className="w-full samm-login-card p-8 space-y-4">
               <div className="flex flex-col items-center text-center space-y-2 pb-2">
                 <SammMark size={44} />
                 <h1 className="font-semibold text-xl text-white tracking-tight">SAMM AI</h1>
@@ -1084,7 +1127,7 @@
                 Explore in demo mode (simulated, nothing is sent)
               </button>
             </form>
-          </div>
+          </AuthShell>
         );
       }
 
@@ -4409,11 +4452,12 @@
                   <div className="text-xs font-mono space-y-1">
                     <div data-testid="who-role" className="text-white">{ROLE_LABELS[identity.role] || identity.role}</div>
                     <div className="side-muted truncate" title={identity.email}>{identity.email}</div>
-                    <div data-testid="who-version" className="side-muted opacity-80">Server {identity.version || "older than v35 - redeploy the backend"} · Screen v39</div>
+                    <div data-testid="who-version" className="side-muted opacity-80">Server {identity.version || "older than v35 - redeploy the backend"} · Screen v40</div>
                     <button onClick={onSignOut} className="mt-2 side-muted hover-w underline">Sign out</button>
                   </div>
                 )}
                 {demo && <button onClick={onSignOut} className="mt-2 text-xs side-muted hover-w underline">Exit demo</button>}
+                <div className="mt-4 pt-3 border-t flex items-center gap-2 text-[10px] side-muted" style={{ borderColor: "var(--side-line)" }}><span>Powered by</span><img src={DATORE_LOGO} alt="Datore" className="h-4 rounded" data-testid="side-powered" /></div>
               </div>
             </div>
 
@@ -4659,9 +4703,8 @@
           } catch (e) { setErr(e); setBusy(false); }
         };
         return (
-          <div className="min-h-screen flex items-center justify-center samm-login-bg p-4 relative">
-            <div className="absolute top-4 right-4"><ThemeToggle /></div>
-            <div data-testid="invite-landing" className="w-full max-w-md samm-login-card p-8 space-y-4">
+          <AuthShell testid="invite-shell">
+            <div data-testid="invite-landing" className="w-full samm-login-card p-8 space-y-4">
               <div className="flex flex-col items-center text-center space-y-2 pb-2">
                 <SammMark size={44} />
                 <h1 className="font-semibold text-xl text-white tracking-tight">You have been invited</h1>
@@ -4679,7 +4722,7 @@
               {err && <div data-testid="invite-error" className="text-xs text-red-300 bg-red-900/20 border border-red-800 rounded-md p-3">{err.message}</div>}
               <button onClick={onSkip} className="w-full text-xs text-[#A0A0A0] hover:text-white underline">I already have an access token</button>
             </div>
-          </div>
+          </AuthShell>
         );
       }
       function parseInvite() {
