@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <!-- SAMM screen v43 -->
+    <!-- SAMM screen v44 -->
     <title>⚙️ SAMM Core AI Platform</title>
     <!-- React core (pinned, production builds) -->
     <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin></script>
@@ -131,6 +131,13 @@
       html body .samm-side .navbtn.on { background:#1a2d5c !important; color:#fff !important; border-left-color: var(--accent-h); }
       html body .samm-side .navbtn:disabled { color:#4a587c !important; cursor:not-allowed; }
       html body .samm-side .side-muted.hover-w:hover { color:#fff !important; }
+      .samm-crumbs { font-size: 13px; color: var(--muted); }
+      .samm-crumbs b { color: var(--strong); font-weight: 600; }
+      .samm-eyebrow { font-size: 11px; letter-spacing: .16em; text-transform: uppercase; color: var(--faint); font-weight: 600; }
+      .samm-h1 { font-size: 36px; font-weight: 600; color: var(--strong); letter-spacing: -.02em; line-height: 1.1; }
+      .samm-tile { text-align: left; padding: 18px 20px; transition: border-color .15s, transform .15s; cursor: pointer; }
+      .samm-tile:hover { border-color: var(--accent-h); transform: translateY(-1px); }
+      .samm-tile .n { font-size: 30px; font-weight: 600; color: var(--strong); letter-spacing: -.02em; }
       .samm-page-title { font-size: 22px; font-weight: 600; color: var(--strong); letter-spacing: -.01em; }
       .samm-iconbtn { display:inline-flex; align-items:center; justify-content:center; width:34px; height:34px; border-radius:8px; border:1px solid var(--line2); background:var(--card); color:var(--muted); cursor:pointer; }
       .samm-iconbtn:hover { color:var(--strong); border-color:var(--accent); }
@@ -970,6 +977,8 @@
         chat: "M4 5h16v10H9l-5 4z",
         reports: "M5 20V10M12 20V4M19 20v-7",
         views: "M3 7l9-4 9 4-9 4zM3 12l9 4 9-4M3 17l9 4 9-4",
+        home: "M3 11l9-8 9 8M5 10v10h5v-6h4v6h5V10",
+        plug: "M9 2v6M15 2v6M6 8h12v3a6 6 0 0 1-12 0zM12 17v5",
         onboarding: "M12 3v12M7 10l5 5 5-5M4 20h16",
         auth: "M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z",
         moon: "M20 14.5A8 8 0 1 1 9.5 4 6.5 6.5 0 0 0 20 14.5z",
@@ -3064,16 +3073,13 @@
         );
       }
 
-      // v26: My views - analysts (and engineers) build their own Gold views from datasets they were granted; engineers grant access
-      function MyViewsHub({ api, role, onViewsChanged, onUseView }) {
+      // v44: analyst access and the review queue (these lived in "My views", which is gone; nothing else was removed)
+      function AccessReview({ api, role }) {
         const isEng = ["engineer", "admin", "system_admin"].includes(role);
         const [data, setData] = useState(null);
         const [err, setErr] = useState(null);
         const [busy, setBusy] = useState(false);
         const [msg, setMsg] = useState("");
-        const blank = { dataset: "", label: "", calc: false, a: "", op: "*", b: "", cname: "", check: false, ccol: "", cmin: "", cmax: "" };
-        const [f, setF] = useState(blank);
-        const [delAsk, setDelAsk] = useState("");
         const [queue, setQueue] = useState({});
         const [grants, setGrants] = useState(null);
         const [newAnalyst, setNewAnalyst] = useState("");
@@ -3081,93 +3087,16 @@
         const loadGrants = async () => { if (!isEng) return; try { setGrants(await api({ action: "grants_get" })); } catch (e) { setErr(e); } };
         useEffect(() => { load(); loadGrants(); }, []);
         const ds = data ? data.datasets : [];
-        const cur = ds.find((d) => d.dataset === f.dataset) || null;
-        const build = async () => {
-          setBusy(true); setMsg(""); setErr(null);
-          const rules = [];
-          if (f.calc) rules.push({ kind: "derive", column: f.a, column2: f.b, name: f.cname, params: { op: f.op }, status: "active", origin: "user" });
-          if (f.check) rules.push({ kind: "range", column: f.ccol, params: { min: f.cmin, max: f.cmax }, status: "active", origin: "user" });
-          try {
-            const r = await api({ action: "build_view", dataset: f.dataset, label: f.label, ...(rules.length ? { rules } : {}) });
-            setMsg("View '" + r.label + "' is ready (" + (r.rows == null ? "?" : r.rows) + " rows). It is private to you.");
-            setF(blank); await load(); onViewsChanged && onViewsChanged();
-          } catch (e) { setErr(e); } finally { setBusy(false); }
-        };
-        const rebuild = async (v) => { setBusy(true); setErr(null); try { await api({ action: "build_view", dataset: v.dataset, label: v.label }); setMsg("View '" + v.label + "' rebuilt."); await load(); onViewsChanged && onViewsChanged(); } catch (e) { setErr(e); } finally { setBusy(false); } };
-        const del = async (v) => { setBusy(true); setErr(null); try { await api({ action: "view_delete", view: v.name }); setDelAsk(""); setMsg("View deleted."); await load(); onViewsChanged && onViewsChanged(); } catch (e) { setErr(e); } finally { setBusy(false); } };
-        const share = async (v) => { setBusy(true); setErr(null); try { await api({ action: "view_share", view: v.name, shared: v.private }); await load(); onViewsChanged && onViewsChanged(); } catch (e) { setErr(e); } finally { setBusy(false); } };
         const openQueue = async (d) => { setErr(null); setQueue((q) => ({ ...q, [d]: { busy: true } })); try { const r = await api({ action: "dq_queue", dataset: d }); setQueue((q) => ({ ...q, [d]: r })); } catch (e) { setQueue((q) => ({ ...q, [d]: null })); setErr(e); } };
         const hold = async (d, on) => { setBusy(true); setErr(null); try { const r = await api({ action: "dq_hold", dataset: d, hold: on }); setMsg((on ? "Flagged rows are now held out of Gold." : "Flagged rows are released.") + " " + r.rebuilt_views + " personal view(s) rebuilt."); await openQueue(d); await load(); onViewsChanged && onViewsChanged(); } catch (e) { setErr(e); } finally { setBusy(false); } };
         const setGrant = async (email, list) => { setErr(null); try { await api({ action: "grants_save", email, datasets: list }); await loadGrants(); } catch (e) { setErr(e); } };
         const inp = "bg-[#2D2D2D] border border-[#3D3D3D] rounded-md py-1.5 px-2 text-sm text-white";
         const bt = "border border-[#2c385d] hover:border-[#8ef4b2] text-white text-xs px-3 py-1.5 rounded-lg disabled:opacity-50";
-        const fields = cur ? cur.fields : [];
-        const canBuild = f.dataset && f.label.trim().length >= 2 && (!f.calc || (f.a && f.b && f.cname)) && (!f.check || (f.ccol && (f.cmin !== "" || f.cmax !== "")));
         return (
-          <div data-testid="myviews" className="max-w-4xl mx-auto space-y-4">
-            <div className="rounded-2xl border border-[#2c385d] bg-[#1c2748] p-5 space-y-2">
-              <h2 className="text-lg font-bold text-white">My views</h2>
-              <p className="text-xs text-[#b8c2d6]">Build your own Gold views from datasets you have been given access to. Your views are private to you until a Data Engineer shares them. Rows a Data Engineer holds back stay held in every view.</p>
-              {err && <div data-testid="myviews-error" className="text-xs text-red-300">{err.message || String(err)}</div>}
-              {msg && <div data-testid="myviews-msg" className="text-xs text-[#8ef4b2]">{msg}</div>}
-            </div>
-
-            <div className="rounded-2xl border border-[#2c385d] bg-[#1c2748] p-5 space-y-3">
-              <h3 className="text-sm font-bold text-white">Build a view</h3>
-              {data && ds.length === 0 && <div data-testid="myviews-nodata" className="text-xs text-amber-300">No datasets are available to you yet. Ask your Data Engineer to grant you access.</div>}
-              <div className="flex flex-wrap gap-2 items-center">
-                <select data-testid="myviews-dataset" aria-label="Dataset" value={f.dataset} onChange={(e) => setF({ ...blank, dataset: e.target.value })} className={inp}>
-                  <option value="">Choose a dataset</option>
-                  {ds.map((d) => <option key={d.dataset} value={d.dataset}>{friendlyDs(d.dataset, d.title)} (Gold)</option>)}
-                </select>
-                <input data-testid="myviews-name" aria-label="View name" placeholder="View name, e.g. monthly_spend" maxLength={40} value={f.label} onChange={(e) => setF({ ...f, label: e.target.value })} className={inp + " w-64"} />
-              </div>
-              {cur && (
-                <div className="space-y-2 text-xs text-[#b8c2d6]">
-                  <div>Columns: {cur.columns.join(", ")}</div>
-                  <label className="flex items-center gap-2"><input data-testid="myviews-calc" type="checkbox" checked={f.calc} onChange={(e) => setF({ ...f, calc: e.target.checked })} /> Add a calculated column</label>
-                  {f.calc && (
-                    <div className="flex flex-wrap gap-2 items-center pl-5">
-                      <select aria-label="First column" value={f.a} onChange={(e) => setF({ ...f, a: e.target.value })} className={inp}><option value="">column</option>{fields.map((x) => <option key={x.source} value={x.source}>{x.label}</option>)}</select>
-                      <select aria-label="Operation" value={f.op} onChange={(e) => setF({ ...f, op: e.target.value })} className={inp}>{["+", "-", "*", "/"].map((o) => <option key={o} value={o}>{o}</option>)}</select>
-                      <select aria-label="Second column" value={f.b} onChange={(e) => setF({ ...f, b: e.target.value })} className={inp}><option value="">column</option>{fields.map((x) => <option key={x.source} value={x.source}>{x.label}</option>)}</select>
-                      <input aria-label="New column name" placeholder="new column name" maxLength={40} value={f.cname} onChange={(e) => setF({ ...f, cname: e.target.value })} className={inp + " w-44"} />
-                    </div>
-                  )}
-                  <label className="flex items-center gap-2"><input data-testid="myviews-check" type="checkbox" checked={f.check} onChange={(e) => setF({ ...f, check: e.target.checked })} /> Flag values outside a range</label>
-                  {f.check && (
-                    <div className="flex flex-wrap gap-2 items-center pl-5">
-                      <select aria-label="Check column" value={f.ccol} onChange={(e) => setF({ ...f, ccol: e.target.value })} className={inp}><option value="">column</option>{fields.map((x) => <option key={x.source} value={x.source}>{x.label}</option>)}</select>
-                      <input aria-label="Minimum" placeholder="min" value={f.cmin} onChange={(e) => setF({ ...f, cmin: e.target.value })} className={inp + " w-24"} />
-                      <input aria-label="Maximum" placeholder="max" value={f.cmax} onChange={(e) => setF({ ...f, cmax: e.target.value })} className={inp + " w-24"} />
-                    </div>
-                  )}
-                </div>
-              )}
-              <button data-testid="myviews-build" disabled={busy || !canBuild} onClick={build} className="bg-[#8ef4b2] text-[#13214a] font-bold text-sm px-4 py-2 rounded-lg disabled:opacity-50">{busy ? "Working…" : "Build view"}</button>
-            </div>
-
-            <div className="rounded-2xl border border-[#2c385d] bg-[#1c2748] p-5 space-y-2">
-              <h3 className="text-sm font-bold text-white">{isEng ? "Personal views in this client" : "Your views"}</h3>
-              {data && data.views.length === 0 && <div data-testid="myviews-empty" className="text-xs text-[#78869b]">No personal views yet.</div>}
-              {data && data.views.map((v) => (
-                <div key={v.name} data-testid="myviews-row" className="flex flex-wrap items-center gap-3 text-xs border-t border-[#2c385d] pt-2">
-                  <span className="font-bold text-white">{v.label}</span>
-                  <span className="text-[#78869b]">{v.dataset ? v.dataset.replace(/^silver_/, "") : ""} · {v.owner || "?"} · {v.rules} own rule(s)</span>
-                  <span data-testid="myviews-vis" className={v.private ? "text-[#b8c2d6]" : "text-[#8ef4b2]"}>{v.private ? "Private" : "Shared"}</span>
-                  {v.stale && <span data-testid="myviews-stale" className="text-amber-300">Needs rebuild (the dataset changed)</span>}
-                  <span className="flex gap-2 ml-auto">
-                    <button data-testid="myviews-use" onClick={() => onUseView && onUseView(v.name)} className={bt}>Ask about it</button>
-                    <button data-testid="myviews-rebuild" disabled={busy} onClick={() => rebuild(v)} className={bt}>Rebuild</button>
-                    {isEng && <button data-testid="myviews-share" disabled={busy} onClick={() => share(v)} className={bt}>{v.private ? "Share" : "Make private"}</button>}
-                    {delAsk === v.name ? (
-                      <span className="flex gap-2 items-center"><span className="text-[#ffe08a]">Delete this view?</span><button data-testid="myviews-del-yes" onClick={() => del(v)} className="underline text-red-300">Yes, delete</button><button onClick={() => setDelAsk("")} className="underline text-[#b8c2d6]">No</button></span>
-                    ) : <button data-testid="myviews-del" onClick={() => setDelAsk(v.name)} className="text-[#78869b] underline">Delete</button>}
-                  </span>
-                </div>
-              ))}
-            </div>
-
+          <div data-testid="access-review" className="space-y-4">
+            {err && <div data-testid="myviews-error" className="text-xs text-red-300">{err.message || String(err)}</div>}
+            {msg && <div data-testid="myviews-msg" className="text-xs text-[#8ef4b2]">{msg}</div>}
+            {data && ds.length === 0 && <div data-testid="myviews-nodata" className="text-xs text-amber-300">No dataset has a Gold view yet. Approve a mapping first.</div>}
             {ds.length > 0 && (
               <div className="rounded-2xl border border-[#2c385d] bg-[#1c2748] p-5 space-y-3">
                 <h3 className="text-sm font-bold text-white">Review queue: rows that break a rule</h3>
@@ -3434,7 +3363,135 @@
         );
       }
 
-      function OnboardingHub({ session, onAsk, onViewsChanged, clients, clientNames, acting }) {
+      // v44: the home screen
+      function OverviewHub({ session, demo, client, clientName, tiles, canOnboard, role, onGo, onAsk }) {
+        const [facts, setFacts] = useState({ loading: true, datasets: null, conns: null, last: "", err: null });
+        const [q, setQ] = useState("");
+        useEffect(() => {
+          if (demo) { setFacts({ loading: false, datasets: null, conns: null, last: "", err: null }); return; }
+          let live = true;
+          (async () => {
+            try {
+              const call = (p) => callBackend(session.url, session.token, client ? { ...p, client } : p);
+              const d = await call({ action: "datasets" });
+              let conns = null;
+              if (canOnboard) { try { conns = ((await call({ action: "db_list" })).connections || []).length; } catch (_) { conns = null; } }
+              const rows = d.datasets || [];
+              const last = rows.map((r) => r.updated || "").sort().pop() || "";
+              if (live) setFacts({ loading: false, datasets: rows.length, conns, last, err: null });
+            } catch (e) { if (live) setFacts({ loading: false, datasets: null, conns: null, last: "", err: e }); }
+          })();
+          return () => { live = false; };
+        }, [client, demo]);
+        const cards = [
+          ["datasets", "Datasets", facts.datasets, "Bronze, Silver and Gold tables SAMM holds", canOnboard, "datasets"],
+          ["connections", "Connections", facts.conns, "Files and databases data comes in from", canOnboard, "connections"],
+          ["reports", "Reports", tiles.length, "Pinned and published reports", true, "dashboard"],
+          ["chat", "Ask SAMM", null, "Ask a question in plain words", role !== "report_viewer", "chat"],
+        ].filter((c) => c[4]);
+        return (
+          <div className="max-w-5xl mx-auto space-y-6" data-testid="overview-hub">
+            <div className="samm-crumbs" data-testid="overview-crumbs">Clients <span className="opacity-60">/</span> {clientName || client} <span className="opacity-60">/</span> <b>Overview</b></div>
+            <div>
+              <div className="samm-eyebrow">Overview</div>
+              <h1 className="samm-h1 mt-1">What SAMM holds for {clientName || client}</h1>
+              {facts.last && <p className="text-sm mt-2" style={{ color: "var(--muted)" }} data-testid="overview-last">Newest data arrived {String(facts.last).replace("T", " ").slice(0, 16)}</p>}
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4" data-testid="overview-tiles">
+              {cards.map(([id, title, n, tip, , go]) => (
+                <button key={id} data-testid={"tile-" + id} onClick={() => onGo(go)} className="samm-card samm-tile">
+                  <div className="samm-eyebrow">{title}</div>
+                  <div className="n mt-2">{facts.loading && n === null && id !== "chat" ? "…" : (n === null || n === undefined ? (id === "chat" ? "→" : "–") : n)}</div>
+                  <div className="text-xs mt-1" style={{ color: "var(--muted)" }}>{tip}</div>
+                </button>
+              ))}
+            </div>
+            {role !== "report_viewer" && (
+              <form className="samm-card p-5 flex flex-wrap items-center gap-3" onSubmit={(e) => { e.preventDefault(); if (q.trim()) onAsk(q.trim()); }}>
+                <label htmlFor="overview-ask" className="samm-eyebrow w-full">Ask a question straight away</label>
+                <input id="overview-ask" data-testid="overview-ask" value={q} onChange={(e) => setQ(e.target.value)} placeholder="For example: what is the total contract value per site?" className="flex-1 min-w-[220px] bg-[#2D2D2D] border border-[#3D3D3D] rounded-lg px-4 py-3 text-sm text-white focus:outline-none focus:border-amber-500" />
+                <button data-testid="overview-ask-go" type="submit" disabled={!q.trim()} className="bg-amber-600 hover:bg-amber-500 disabled:opacity-40 text-white text-sm font-semibold px-5 py-3 rounded-lg">Ask SAMM</button>
+              </form>
+            )}
+            {facts.err && <ErrBox err={facts.err} />}
+          </div>
+        );
+      }
+
+      // v44: a read-only look at the files this client has in the S3 ingest bucket
+      function S3Browser({ api }) {
+        const [view, setView] = useState({ loading: true, err: null, data: null });
+        const [prefix, setPrefix] = useState("");
+        const [q, setQ] = useState("");
+        const [term, setTerm] = useState("");
+        const load = async (p, search) => {
+          setView((v) => ({ ...v, loading: true, err: null }));
+          try { const data = await api({ action: "s3_browse", prefix: p || undefined, q: search || undefined }); setView({ loading: false, err: null, data }); }
+          catch (e) { setView({ loading: false, err: e, data: null }); }
+        };
+        useEffect(() => { load(prefix, term); }, [prefix, term]);
+        const d = view.data;
+        const crumbs = () => {
+          if (!prefix) return [];
+          const root = (d && d.root) || "";
+          const out = [];
+          if (root) out.push({ label: (d && d.layer) || "Folder", to: root });
+          const rest = prefix.slice(root.length).split("/").filter(Boolean);
+          rest.forEach((seg, i) => out.push({ label: seg, to: root + rest.slice(0, i + 1).join("/") + "/" }));
+          return out;
+        };
+        const fileRows = (files) => (
+          <div className="overflow-x-auto"><table className="w-full text-xs" data-testid="s3-files"><thead><tr className="text-left" style={{ color: "var(--muted)" }}><th className="py-1.5 pr-3">File</th><th className="py-1.5 pr-3">Size</th><th className="py-1.5 pr-3">Last changed</th><th className="py-1.5">Area</th></tr></thead>
+            <tbody>{files.map((f) => (
+              <tr key={f.prefix + f.name} data-testid="s3-file" className="border-t border-[#2D2D2D]"><td className="py-1.5 pr-3 font-mono break-all text-white">{term ? f.path : f.name}</td><td className="py-1.5 pr-3 whitespace-nowrap">{f.size}</td><td className="py-1.5 pr-3 whitespace-nowrap">{f.last}</td><td className="py-1.5" style={{ color: "var(--muted)" }}>{f.layer}</td></tr>
+            ))}</tbody></table></div>
+        );
+        return (
+          <div className="space-y-4" data-testid="s3-browser">
+            <div className="flex flex-wrap items-end justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-bold text-white">S3 bucket</h3>
+                <p className="text-[11px] mt-1" style={{ color: "var(--faint)" }}>Every file this client has in the ingest bucket{d && d.bucket ? " (" + d.bucket + ")" : ""}. Read-only: you can look, not change. To remove data use Remove on the Silver or Gold tab.</p>
+              </div>
+              <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); setTerm(q.trim()); }}>
+                <input data-testid="s3-search" aria-label="Search file names" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search file names" className="bg-[#2D2D2D] border border-[#3D3D3D] rounded-lg px-3 py-1.5 text-xs text-white w-52 focus:outline-none focus:border-amber-500" />
+                <button data-testid="s3-search-go" className="border border-[#3D3D3D] hover:border-amber-500 text-xs text-white px-3 py-1.5 rounded-lg">Search</button>
+                {term && <button type="button" data-testid="s3-search-clear" onClick={() => { setQ(""); setTerm(""); }} className="text-xs underline" style={{ color: "var(--muted)" }}>Clear</button>}
+              </form>
+            </div>
+            <ErrBox err={view.err} />
+            {view.loading && <div className="text-xs text-[#A0A0A0]">Loading...</div>}
+            {d && d.mode === "top" && !term && (<>
+              <div data-testid="s3-totals" className="text-xs" style={{ color: "var(--soft)" }}>{d.totals.files} file{d.totals.files === 1 ? "" : "s"} · {d.totals.size}{d.totals.last ? " · newest " + d.totals.last : ""}</div>
+              <div className="grid gap-3 sm:grid-cols-3">
+                {d.areas.map((a) => (
+                  <button key={a.prefix} data-testid="s3-area" onClick={() => setPrefix(a.prefix)} className="samm-card samm-tile">
+                    <div className="samm-eyebrow">{a.label}</div>
+                    <div className="n mt-2">{a.files}{a.truncated ? "+" : ""}</div>
+                    <div className="text-xs mt-1" style={{ color: "var(--muted)" }}>{a.size}{a.last ? " · " + a.last : ""}</div>
+                  </button>
+                ))}
+              </div>
+              {d.totals.files === 0 && <div className="text-xs text-[#808080]" data-testid="s3-empty">No files yet for this client.</div>}
+            </>)}
+            {d && d.mode === "folder" && !term && (<>
+              <div className="flex flex-wrap items-center gap-1 text-xs" data-testid="s3-crumbs">
+                <button data-testid="s3-up" onClick={() => setPrefix("")} className="underline" style={{ color: "var(--muted)" }}>All areas</button>
+                {crumbs().map((c) => <span key={c.to} className="flex items-center gap-1"><span className="opacity-60">/</span><button onClick={() => setPrefix(c.to)} className={c.to === prefix ? "text-white font-semibold" : "underline"} style={c.to === prefix ? undefined : { color: "var(--muted)" }}>{c.label}</button></span>)}
+              </div>
+              {d.folders.length > 0 && <div className="flex flex-wrap gap-2">{d.folders.map((f) => <button key={f.prefix} data-testid="s3-folder" onClick={() => setPrefix(f.prefix)} className="border border-[#3D3D3D] hover:border-amber-500 text-xs text-white px-3 py-1.5 rounded-lg font-mono">📁 {f.name}</button>)}</div>}
+              {d.files.length > 0 ? fileRows(d.files) : (d.folders.length === 0 && <div className="text-xs text-[#808080]">This folder is empty.</div>)}
+              {d.truncated && <div className="text-[11px] text-amber-300">Only the first entries are shown. Search by file name to find a specific file.</div>}
+            </>)}
+            {d && d.mode === "search" && (<>
+              <div className="text-xs" style={{ color: "var(--soft)" }} data-testid="s3-found">{d.found} file{d.found === 1 ? "" : "s"} match “{d.q}”{d.found > d.files.length ? " (showing the newest " + d.files.length + ")" : ""}{d.truncated ? ". The search stopped at the first 20,000 files." : ""}</div>
+              {d.files.length > 0 && fileRows(d.files)}
+            </>)}
+          </div>
+        );
+      }
+
+      function OnboardingHub({ session, onAsk, onViewsChanged, clients, clientNames, acting, mode, onMode }) {
         const [items, setItems] = useState([]);
         const [over, setOver] = useState(false);
         const [pipe, setPipe] = useState({ busy: false, msg: "", err: null });
@@ -3443,7 +3500,10 @@
         const setOrder = (o) => { setOrderState(o); try { localStorage.setItem("samm_hist_order", o); } catch (_) { /* optional */ } };
         const sortedHistory = history.list.slice().sort((a, b) => (String(a.created || "") < String(b.created || "") ? -1 : 1) * (order === "oldest" ? 1 : -1));
         const [viewsTick, setViewsTick] = useState(0);
-        const [tab, setTab] = useState("upload");
+        const DS_TABS = ["bronze", "silver", "links", "gold", "s3", "access", "tools"];
+        const [tab, setTab] = useState(mode === "connections" ? "upload" : "gold");
+        useEffect(() => { setTab((t) => (mode === "connections" ? "upload" : (DS_TABS.includes(t) ? t : "gold"))); }, [mode]);
+        const goTab = (id) => { if (DS_TABS.includes(id) && mode === "connections" && onMode) onMode("datasets"); setTab(id); };
         const [autoMsg, setAutoMsg] = useState("");
         const autoBusy = useRef(false);
         const autoTimer = useRef(null);
@@ -3665,15 +3725,19 @@
           <div className="max-w-4xl mx-auto space-y-5" data-testid="onboarding-hub">
             <div className="bg-[#222222] border border-[#2D2D2D] rounded-xl p-6 shadow-xl space-y-4">
               <div>
-                <h2 className="text-lg font-bold text-white">📦 Onboarding</h2>
-                <p className="text-xs text-[#A0A0A0] mt-1">Drop a file and SAMM keeps the original (Bronze), turns it into rows and columns (Silver), suggests how its columns match your standard names, and builds a view you can ask questions about (Gold). csv, tsv, json, jsonl, txt and Excel are structured; other formats are archived untouched.</p>
+                <h2 className="text-lg font-bold text-white">{mode === "connections" ? "🔌 Connections" : "🗂 Datasets"}</h2>
+                <p className="text-xs text-[#A0A0A0] mt-1">{mode === "connections"
+                  ? "Where data comes in from. Add a file or folder, or connect a database. SAMM keeps the original (Bronze), turns it into rows and columns (Silver), suggests how its columns match your standard names, and builds a view you can ask questions about (Gold). csv, tsv, json, jsonl, txt and Excel are structured; other formats are archived untouched."
+                  : "Everything SAMM holds for this client: the original files (Bronze), the converted tables (Silver), how tables link together, the views you ask questions about (Gold), the files in the S3 bucket, and Teach & test."}</p>
               </div>
+              {mode !== "connections" && (
               <div data-testid="onb-tabs" role="tablist" className="flex flex-wrap gap-2 border-b border-[#2D2D2D] pb-3">
-                {[["upload", "⬆ Upload", "Drop a file and watch it move through"], ["bronze", "Bronze", "The original files, exactly as uploaded"], ["silver", "Silver", "Converted tables"], ["links", "Links & drill-down", "Tables that belong together"], ["gold", "Gold views", "Ready to use: ask questions, publish reports"], ["tools", "Tools", "Teach SAMM and self-test"]].map(([id, label, tip]) => (
+                {[["bronze", "Bronze", "The original files, exactly as uploaded"], ["silver", "Silver", "Converted tables"], ["links", "Links & drill-down", "Tables that belong together"], ["gold", "Gold views", "Ready to use: ask questions, publish reports"], ["s3", "S3 bucket", "Every file stored for this client (read-only)"], ["access", "Access & review", "Which analysts see which dataset, and rows that break a rule"], ["tools", "Teach & test", "Teach SAMM and self-test"]].map(([id, label, tip]) => (
                   <button key={id} role="tab" aria-selected={tab === id} title={tip} data-testid={"onb-tab-" + id} onClick={() => { setTab(id); if (id === "bronze" && !history.open) loadHistory(history.limit); }}
                     className={"px-3 py-1.5 rounded-lg text-xs font-semibold border transition " + (tab === id ? "border-amber-500 bg-amber-500/10 text-amber-300" : "border-[#3D3D3D] text-[#C0C0C0] hover:border-amber-600 hover:text-white")}>{label}</button>
                 ))}
               </div>
+              )}
               {tab === "upload" && (<>
               {(clients || []).length > 1 && (
                 <label className="flex flex-wrap items-center gap-2 text-xs text-[#C0C0C0]">Which client is this data for?
@@ -3764,7 +3828,7 @@
             {tab === "upload" && (<>
             <div data-testid="onb-toolbar" className="flex flex-wrap items-center gap-3">
               <button onClick={() => setItems([])} disabled={items.length === 0} data-testid="clear-list" title="Empty this list (nothing is deleted; running jobs carry on and stay in History)" className="border border-[#3D3D3D] hover:border-amber-500 text-xs text-white px-3 py-2 rounded-lg disabled:opacity-40">🧹 Clear list</button>
-              <button onClick={() => { setTab("bronze"); loadHistory(history.limit); }} data-testid="history-toggle" className="border border-[#3D3D3D] hover:border-amber-500 text-xs text-white px-3 py-2 rounded-lg">{history.open ? "Hide history" : "📜 History"}</button>
+              <button onClick={() => { goTab("bronze"); loadHistory(history.limit); }} data-testid="history-toggle" className="border border-[#3D3D3D] hover:border-amber-500 text-xs text-white px-3 py-2 rounded-lg">{history.open ? "Hide history" : "📜 History"}</button>
               <span className="text-[11px] text-[#808080]">{items.length === 0 ? "Your list is empty. Drop a file above to start." : items.length + " on this screen. Clearing only tidies the screen."}</span>
             </div>
 
@@ -3773,7 +3837,7 @@
             {items.some((i) => i.done) && (
               <div data-testid="done-banner" className="flex flex-wrap items-center gap-3 text-xs bg-[#10241A] border border-green-800 rounded-lg px-4 py-2 text-green-300">
                 ✓ A data set is ready.
-                <button data-testid="go-gold" onClick={() => setTab("gold")} className="underline text-green-200 hover:text-white">View it in Gold views</button>
+                <button data-testid="go-gold" onClick={() => goTab("gold")} className="underline text-green-200 hover:text-white">View it in Gold views</button>
               </div>
             )}
             {runs.map((r) => {
@@ -3874,6 +3938,8 @@
             {tab === "silver" && <SilverTab api={api} onAsk={onAsk} tick={viewsTick} />}
             {tab === "gold" && <GoldViews api={api} onAsk={onAsk} tick={viewsTick} />}
             {tab === "links" && <LinksPanel key={acting} api={api} role={session.identity ? session.identity.role : ""} />}
+            {tab === "s3" && <S3Browser key={acting} api={api} />}
+            {tab === "access" && <AccessReview key={acting} api={api} role={session.identity ? session.identity.role : ""} />}
             {tab === "tools" && (<><TeachPanel api={api} /><SelfTestPanel api={api} /></>)}
 
           </div>
@@ -4245,7 +4311,7 @@
 
         const [input, setInput] = useState("");
         const [persona, setPersona] = useState("architect");
-        const [activeTab, setActiveTab] = useState(role === "report_viewer" ? "dashboard" : "chat");
+        const [activeTab, setActiveTab] = useState(() => { let h = ""; try { h = String(window.location.hash || "").replace("#", ""); } catch (_) { /* optional */ } if (role === "report_viewer") return "dashboard"; return ["overview", "chat", "dashboard", "connections", "datasets", "governance"].includes(h) ? h : "overview"; });
         const [isLoading, setIsLoading] = useState(false);
 
         const [s3Path, setS3Path] = useState("s3://shiftleft-superposition-ingest-vault/CS.json");
@@ -4319,8 +4385,7 @@
         const canGovern = CAN_GOVERN.includes(role);
         const canGold = CAN_GOLD.includes(role);
         useEffect(() => {
-          if (activeTab === "myviews" && !canGold) setActiveTab("chat");
-          if (activeTab === "onboarding" && !canOnboard) setActiveTab("chat");
+          if ((activeTab === "connections" || activeTab === "datasets") && !canOnboard) setActiveTab("overview");
           if (activeTab === "governance" && !canGovern) setActiveTab("chat");
         }, [role]);
 
@@ -4481,7 +4546,7 @@
 
         const navClass = (tab, disabled) =>
           "navbtn w-full text-left flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition" + (activeTab === tab ? " on" : "");
-        const PAGE_TITLES = { chat: "Ask SAMM", dashboard: "Reports", myviews: "My views", onboarding: "Onboarding", governance: "Authorizations" };
+        const PAGE_TITLES = { overview: "Overview", chat: "Ask SAMM", dashboard: "Reports", connections: "Connections", datasets: "Datasets", governance: "Authorizations" };
         const [uiTheme, flipTheme] = useTheme();
         const [showPw, setShowPw] = useState(false);
 
@@ -4513,23 +4578,20 @@
                 )}
                 <nav className="p-4 space-y-1">
                   <div className="text-[10px] uppercase tracking-wider side-label font-semibold px-2 pt-1 pb-1">User</div>
+                  {!isRV && <button data-testid="nav-overview" onClick={() => setActiveTab("overview")} className={navClass("overview", false)}>
+                    <Icon name="home" /><span>Overview</span>
+                  </button>}
                   {!isRV && <button data-testid="nav-chat" onClick={() => setActiveTab("chat")} className={navClass("chat", false)}>
                     <Icon name="chat" /><span>Ask SAMM</span>
                   </button>}
                   <button data-testid="nav-dashboard" onClick={() => setActiveTab("dashboard")} className={navClass("dashboard", false)}>
                     <Icon name="reports" /><span>Reports{tiles.length ? " (" + tiles.length + ")" : ""}</span>
                   </button>
-                  {!isRV && <button data-testid="nav-myviews" onClick={() => canGold && setActiveTab("myviews")} disabled={!canGold} title={canGold ? "" : "Requires Analyst or above"} className={navClass("myviews", !canGold)}>
-                    <Icon name="views" /><span>My views</span>
+                  {!isRV && <button data-testid="nav-connections" onClick={() => canOnboard && setActiveTab("connections")} disabled={!canOnboard} title={canOnboard ? "" : "Requires Data Engineer or above"} className={navClass("connections", !canOnboard)}>
+                    <Icon name="plug" /><span>Connections</span>
                   </button>}
-                  {!isRV && <button
-                    data-testid="nav-onboarding"
-                    onClick={() => canOnboard && setActiveTab("onboarding")}
-                    disabled={!canOnboard}
-                    title={canOnboard ? "" : "Requires Data Engineer or above"}
-                    className={navClass("onboarding", !canOnboard)}
-                  >
-                    <Icon name="onboarding" /><span>Onboarding</span>
+                  {!isRV && <button data-testid="nav-datasets" onClick={() => canOnboard && setActiveTab("datasets")} disabled={!canOnboard} title={canOnboard ? "" : "Requires Data Engineer or above"} className={navClass("datasets", !canOnboard)}>
+                    <Icon name="views" /><span>Datasets</span>
                   </button>}
                   {!isRV && <div className="text-[10px] uppercase tracking-wider side-label font-semibold px-2 pt-4 pb-1">Administrator</div>}
                   {!isRV && <button
@@ -4561,7 +4623,7 @@
                   <div className="text-xs font-mono space-y-1">
                     <div data-testid="who-role" className="text-white">{ROLE_LABELS[identity.role] || identity.role}</div>
                     <div className="side-muted truncate" title={identity.email}>{identity.email}</div>
-                    <div data-testid="who-version" className="side-muted opacity-80">Server {identity.version || "older than v35 - redeploy the backend"} · Screen v43</div>
+                    <div data-testid="who-version" className="side-muted opacity-80">Server {identity.version || "older than v35 - redeploy the backend"} · Screen v44</div>
                     <div className="flex gap-3 mt-2">
                       {identity.can_change_password !== false && <button data-testid="change-password-open" onClick={() => setShowPw(true)} className="side-muted hover-w underline">Change password</button>}
                       <button onClick={onSignOut} className="side-muted hover-w underline">Sign out</button>
@@ -4674,8 +4736,15 @@
                   </div>
                 )}
 
-                {activeTab === "onboarding" && !demo && (
+                {activeTab === "overview" && (
+                  <OverviewHub session={session} demo={demo} client={acting || identity.tenant_id} clientName={cname(acting || identity.tenant_id)} tiles={tiles} canOnboard={canOnboard} role={role}
+                    onGo={(t) => setActiveTab(t)} onAsk={(q) => { setActiveTab("chat"); sendText(q); }} />
+                )}
+
+                {(activeTab === "connections" || activeTab === "datasets") && !demo && (
                   <OnboardingHub
+                    mode={activeTab}
+                    onMode={(m) => setActiveTab(m)}
                     session={session}
                     clients={clients}
                     clientNames={clientNames}
@@ -4691,7 +4760,7 @@
                   />
                 )}
 
-                {activeTab === "onboarding" && demo && (
+                {(activeTab === "connections" || activeTab === "datasets") && demo && (
                   <div className="max-w-2xl mx-auto bg-[#222222] border border-[#2D2D2D] rounded-xl p-6 shadow-xl space-y-6">
                     <div className="border-b border-[#2D2D2D] pb-4">
                       <h2 className="text-lg font-bold text-white">⚙️ Pipeline Orchestration Hub</h2>
@@ -4727,10 +4796,6 @@
                       </button>
                     </div>
                   </div>
-                )}
-
-                {activeTab === "myviews" && !demo && (
-                  <MyViewsHub role={role} api={(p) => callBackend(session.url, session.token, p)} onViewsChanged={loadViews} onUseView={(v) => { setActiveView(v); setActiveTab("chat"); }} />
                 )}
 
                 {activeTab === "dashboard" && (
