@@ -705,6 +705,35 @@
         }
         return null;
       }
+      // v47: build from the chat. "build me a dashboard of X, Y" and "add a rule that rent must be between 0 and 50000".
+      function parseBuildCommand(text) {
+        const t = String(text || "").trim().replace(/[.!]+$/, "");
+        let m = /^(?:please\s+)?(?:can\s+you\s+)?(?:build|make|create|generate|set\s+up|put\s+together)\s+(?:me\s+)?(?:a\s+|an\s+|my\s+|the\s+)?(?:new\s+)?dashboard\s*(?:of|with|showing|that\s+shows|for|about|on|:|-)?\s*(.+)$/i.exec(t);
+        if (m && m[1].trim().length > 2) return { kind: "dashboard", text: m[1].trim() };
+        m = /^(?:please\s+)?(?:add|create|set\s+up|make)\s+(?:a\s+|an\s+|new\s+)*(?:data\s+)?(?:quality\s+)?rules?\s*(?:(?:in|on|for)\s+([^:]{2,60}?)\s*:)?\s*(?:that|:|saying|so\s+that|where)?\s*(.{4,})$/i.exec(t);
+        if (m) return { kind: "rule", dataset: (m[1] || "").trim(), text: m[2].trim() };
+        m = /^(?:please\s+)?(?:in\s+([^:]{2,60}?)\s*:\s*)?(add\s+(?:a|an)\s+(?:new\s+)?(?:calculated\s+)?(?:column|field)\b.{4,})$/i.exec(t);
+        if (m) return { kind: "rule", dataset: (m[1] || "").trim(), text: m[2].trim() };
+        return null;
+      }
+      function PendingRules({ p, busy, onApply, onPick }) {
+        return (
+          <div data-testid="chat-rules" className="mt-3 space-y-1 text-xs">
+            {p.plan.lines.length > 0 && <div className="text-white font-semibold">SAMM understood these rules for {p.title}:</div>}
+            {p.plan.lines.map((l, i) => <div key={i} data-testid="chat-rule-line" className="text-[#D0D0D0]">• {l}</div>)}
+            {p.plan.skipped.map((k, i) => (
+              <div key={"s" + i} data-testid="chat-rule-skipped" className="text-amber-200">
+                Not understood: "{k.text}". {k.why}
+                {Array.isArray(k.choices) && k.choices.length > 0 && <div className="flex flex-wrap gap-2 mt-1">{k.choices.map((c) => <button key={c.label} data-testid="chat-rule-choice" disabled={busy} onClick={() => onPick(k.text, c.text)} className="text-xs border border-[#3D3D3D] hover:border-amber-500 text-[#D0D0D0] px-3 py-1 rounded-full disabled:opacity-50">{c.label}</button>)}</div>}
+              </div>
+            ))}
+            {p.plan.lines.length > 0 && p.plan.can_apply === false && <div data-testid="chat-rule-blocked" className="text-amber-200">You can preview this, but not apply it. {p.plan.cannot_apply_reason}</div>}
+            {p.plan.lines.length > 0 && p.plan.can_apply !== false && !p.done && <button data-testid="chat-rule-apply" disabled={busy} onClick={onApply} className="mt-1 border border-[#8ef4b2] text-[#8ef4b2] text-xs px-3 py-1.5 rounded-lg disabled:opacity-50">Apply {p.plan.lines.length} rule(s)</button>}
+            {p.done && <div data-testid="chat-rule-done" className="text-[#8ef4b2]">{p.done}</div>}
+            {p.plan.lines.length > 0 && !p.done && <div className="text-[10px] text-[#78869b]">Nothing changes until you press Apply. Your original rows are never changed.</div>}
+          </div>
+        );
+      }
       function SplitChat({ messages, since, isLoading, input, setInput, onSend, onClose, label, reportId, onAdd, onOpenArtifact }) {
         const [added, setAdded] = useState({});
         const [err, setErr] = useState("");
@@ -935,6 +964,21 @@
         const [pubMsg, setPubMsg] = useState("");
         const [pbiLink, setPbiLink] = useState("");
         const [pbi, setPbi] = useState(null);
+        const [pbiOut, setPbiOut] = useState(null);
+        const [shareTo, setShareTo] = useState("");
+        const [shareNote, setShareNote] = useState("");
+        const [shareLink, setShareLink] = useState("");
+        const [shareGrant, setShareGrant] = useState(false);
+        const [shareBusy, setShareBusy] = useState(false);
+        const [shareRes, setShareRes] = useState(null);
+        const [shareErr, setShareErr] = useState("");
+        const sendShare = async () => {
+          setShareBusy(true); setShareErr(""); setShareRes(null);
+          try {
+            const r = await api({ action: "powerbi_share", title: pbiOut.title, dataset_id: pbiOut.dataset_id, tables: pbiOut.tables, rows: pbiOut.rows, to: shareTo, note: shareNote, link: shareLink.trim(), grant: shareGrant });
+            setShareRes(r);
+          } catch (e) { setShareErr((e && e.message) || "Could not send."); } finally { setShareBusy(false); }
+        };
         useEffect(() => { if (pubTool === "powerbi_live" && api && !pbi) api({ action: "powerbi_status" }).then(setPbi).catch((e) => setPbi({ ok: false, message: e.message || "Could not check." })); }, [pubTool]);
         const [reports, setReports] = useState([]);
         const [viewing, setViewing] = useState(null);
@@ -962,7 +1006,8 @@
               const r = await api({ action: "powerbi_publish", title, tiles: tiles.filter((t) => t.rows && t.rows.length).map((t) => ({ title: t.title, rows: t.rows, at: t.at })) });
               setPubMsg("Sent to Power BI: dataset \"" + r.dataset + "\" with " + r.rows + " row(s) in " + r.tables.length + " table(s)" + (r.refreshed ? " (refreshed)" : "") + ". In Power BI open the workspace, choose that dataset and click Create report.");
               setPbiLink(r.link);
-            } catch (e) { setPubMsg("Could not send to Power BI: " + (e && e.message ? e.message : e)); setPbiLink(""); }
+              setPbiOut({ title, dataset_id: r.dataset_id, tables: r.tables.length, rows: r.rows }); setShareRes(null); setShareErr("");
+            } catch (e) { setPubMsg("Could not send to Power BI: " + (e && e.message ? e.message : e)); setPbiLink(""); setPbiOut(null); }
             return;
           }
           try {
@@ -1008,6 +1053,26 @@
                 {pubTool === "powerbi_live" && pbi && <div data-testid="pbi-status" className={"text-[11px] " + (pbi.ok ? "text-emerald-300" : "text-amber-200")}>{pbi.ok ? pbi.message : "Not connected yet: " + pbi.message + " You can still pick \"Power BI package\" and import it by hand."}</div>}
                 {pubMsg && <div data-testid="publish-msg" className="text-[11px] text-emerald-300">{pubMsg}{pbiLink && <> <a data-testid="pbi-link" href={pbiLink} target="_blank" rel="noopener noreferrer" className="underline">Open Power BI</a></>}</div>}
 
+                {pubTool === "powerbi_live" && pbiOut && (
+                  <div data-testid="pbi-share" className="border border-[#2c385d] rounded-xl p-3 space-y-2 text-xs">
+                    <div className="font-bold text-white">Share this with the people who read the report</div>
+                    <div className="text-[11px] text-[#b8c2d6]">SAMM e-mails them a link to open it in Power BI. They sign in with their own work account. Up to 5 addresses, separated by commas.</div>
+                    <input aria-label="Send to" data-testid="pbi-share-to" value={shareTo} onChange={(e) => setShareTo(e.target.value)} placeholder="anna@company.com, ben@company.com" className="w-full bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-white focus:outline-none focus:border-amber-500" />
+                    <input aria-label="Message" data-testid="pbi-share-note" value={shareNote} onChange={(e) => setShareNote(e.target.value)} maxLength={400} placeholder="Optional message, for example: October numbers are in" className="w-full bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-white focus:outline-none focus:border-amber-500" />
+                    <input aria-label="Report link" data-testid="pbi-share-link" value={shareLink} onChange={(e) => setShareLink(e.target.value)} placeholder="Optional: paste the report's own link from Power BI (https://app.powerbi.com/...)" className="w-full bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-white focus:outline-none focus:border-amber-500" />
+                    <label className="flex items-start gap-2 text-[11px] text-[#b8c2d6]"><input data-testid="pbi-share-grant" type="checkbox" checked={shareGrant} onChange={(e) => setShareGrant(e.target.checked)} className="mt-0.5" /><span>Also give them Viewer access to the Power BI workspace (needs the SAMM app to be an Admin of the workspace). Without this, ask the workspace owner to add them.</span></label>
+                    <div className="text-[10px] text-[#78869b]">Heads up: opening content in a shared Power BI workspace needs a Power BI Pro or Premium Per User licence for each reader, unless the workspace is on Premium or Fabric capacity. If your e-mail service is still in sandbox mode, it only sends to addresses verified there.</div>
+                    <button data-testid="pbi-share-send" disabled={shareBusy || !shareTo.trim()} onClick={sendShare} className="border border-[#8ef4b2] text-[#8ef4b2] px-3 py-1 rounded-md disabled:opacity-50">{shareBusy ? "Sending..." : "E-mail the link"}</button>
+                    {shareErr && <div data-testid="pbi-share-error" className="text-red-300">{shareErr}</div>}
+                    {shareRes && (
+                      <div data-testid="pbi-share-result" className="space-y-1">
+                        <div className="text-emerald-300">{shareRes.sent} of {shareRes.results.length} e-mail(s) sent.</div>
+                        {shareRes.results.map((r) => <div key={r.email} data-testid="pbi-share-row" className={r.sent ? "text-[#b8c2d6]" : "text-amber-200"}>{r.email}: {r.sent ? "sent" : "not sent (" + r.error + ")"}{r.access && r.access !== "not requested" ? " · access " + r.access : ""}</div>)}
+                        <div className="text-[10px] text-[#78869b]">Link in the e-mail: <a href={shareRes.link} target="_blank" rel="noopener noreferrer" className="underline">{shareRes.link}</a></div>
+                      </div>
+                    )}
+                  </div>
+                )}
                 <div className="text-[10px] text-[#707070]">{pubTool === "powerbi_live" ? "Sends the tiles below to your Power BI workspace as a dataset, one table per tile. Then open Power BI, choose the dataset and click Create report." : pubTool === "html" ? "Creates one good-looking report page from the tiles below. Open it in a browser or print it to PDF." : "Creates a ready-to-import package (data files, " + (pubTool === "powerbi" ? "DAX measures" : "a data model description") + " and a styled report.html) from the tiles below."} The numbers are exactly as SAMM calculated them for you.</div>
               </div>
             )}
@@ -4582,12 +4647,95 @@
             addMessage({ role: "assistant", error: { message: (e && e.message) || "Could not change the report.", details: [], status: (e && e.status) || 0 } });
           } finally { setIsLoading(false); }
         };
-        const sendText = async (userText) => {
+        const api2 = (p) => callBackend(session.url, session.token, p);
+        const CAN_FIX = CAN_ONBOARD.includes(role);
+        const setPending = (id, fn) => setMessages((prev) => prev.map((m) => m.id === id ? { ...m, pending: fn(m.pending) } : m));
+        const planRules = async (id, base) => {
+          try {
+            const plan = await api2({ action: "vibe_data_plan", dataset: base.dataset || undefined, view: base.dataset ? undefined : (activeView || defaultView || undefined), text: base.text });
+            const ds = plan.dataset || base.dataset;
+            setPending(id, () => ({ dataset: ds, title: friendlyDs(ds), text: base.text, plan, done: "" }));
+          } catch (e) { setPending(id, () => null); throw e; }
+        };
+        const runBuildCommand = async (userText, bc) => {
+          addMessage({ role: "user", text: userText });
+          setInput("");
+          if (bc.kind === "rule" && !CAN_FIX) { addMessage({ role: "assistant", text: "Changing a dataset's data rules is for Data Engineers. Ask yours to add this rule, or ask me a question about the data instead." }); return; }
+          setIsLoading(true);
+          try {
+            if (bc.kind === "dashboard") {
+              const plan = await api2({ action: "vibe_dashboard_plan", text: bc.text });
+              if (!plan.items.length) { addMessage({ role: "assistant", text: plan.note || "I could not find anything to put on a dashboard. Try: build me a dashboard of total contract value by site, top 5 tenants by rent." }); return; }
+              const at = stamp(); const out = new Array(plan.items.length);
+              const one = async (it, i) => {
+                try {
+                  const d = await api2({ action: "query", prompt: it.question });
+                  if (d.clarify) out[i] = { ask: d.clarify, title: it.title };
+                  else if (Array.isArray(d.raw_data_grid) && d.raw_data_grid.length) out[i] = { tile: { id: "t" + Date.now() + "_" + i, title: it.title, rows: d.raw_data_grid.slice(0, 60), at } };
+                  else out[i] = { fail: it.title + ": SAMM had no table to show for this." };
+                } catch (e) { out[i] = { fail: it.title + ": " + ((e && e.message) || "could not be answered") }; }
+              };
+              for (let i = 0; i < plan.items.length; i += 3) await Promise.all(plan.items.slice(i, i + 3).map((it, j) => one(it, i + j)));
+              const made = out.filter((r) => r && r.tile).map((r) => r.tile);
+              if (made.length) setTiles((p) => made.concat(p).slice(0, 12));
+              const asks = out.filter((r) => r && r.ask);
+              const lines = [made.length ? "Done. I added **" + made.length + " tile(s)** to your dashboard: " + made.map((t) => t.title).join(", ") + "." : "I could not build a tile from that."];
+              out.filter((r) => r && r.fail).forEach((r) => lines.push("- Skipped: " + r.fail));
+              (plan.skipped || []).forEach((k) => lines.push("- Skipped: " + k.text + ": " + k.why));
+              if (asks.length) lines.push("", "**" + asks[0].title + "** needs one answer from you first. Tap the amount you mean and I will add it.");
+              addMessage({ role: "assistant", text: lines.join("\n"), buildDone: made.length > 0, chips: asks.length ? asks[0].ask.choices.map((c) => ({ label: c, send: "build me a dashboard of " + c })) : [] });
+            } else {
+              const id = "m" + ++nextId.current;
+              setMessages((prev) => [...prev, { id, role: "assistant", timestamp: stamp(), text: "Reading your rule...", pending: null }]);
+              let ds = "";
+              if (bc.dataset) {
+                try { const r = await api2({ action: "my_datasets" }); const w = bc.dataset.toLowerCase(); const hit = (r.datasets || []).find((d) => friendlyDs(d.dataset, d.title).toLowerCase() === w || String(d.dataset).toLowerCase().includes(w.replace(/\s+/g, "_")) || friendlyDs(d.dataset, d.title).toLowerCase().includes(w)); if (hit) ds = hit.dataset; } catch (_) { /* fall back to the active view */ }
+              }
+              try {
+                await planRules(id, { dataset: ds, text: bc.text });
+                setMessages((prev) => prev.map((m) => m.id === id ? { ...m, text: "Here is what I understood. **Nothing has changed yet.**" } : m));
+              } catch (e) {
+                let chips = [];
+                try { const r = await api2({ action: "my_datasets" }); chips = (r.datasets || []).slice(0, 5).map((d) => ({ label: friendlyDs(d.dataset, d.title), send: "add a rule in " + friendlyDs(d.dataset, d.title) + ": " + bc.text })); } catch (_) { /* no list */ }
+                setMessages((prev) => prev.map((m) => m.id === id ? { ...m, text: (e && e.message) || "I could not read that rule.", chips, error: undefined } : m));
+              }
+            }
+          } catch (e) {
+            addMessage({ role: "assistant", error: { message: (e && e.message) || "That did not work.", details: (e && e.details) || [], status: (e && e.status) || 0 } });
+          } finally { setIsLoading(false); }
+        };
+        const applyPending = async (id) => {
+          const m = messages.find((x) => x.id === id); if (!m || !m.pending) return;
+          setIsLoading(true);
+          try {
+            const r = await api2({ action: "vibe_data_apply", dataset: m.pending.dataset, text: m.pending.text });
+            setPending(id, (p) => ({ ...p, done: "Applied " + r.applied.length + " rule(s) to " + p.title + ". The Gold view was rebuilt." + (r.skipped && r.skipped.length ? " (" + r.skipped.length + " sentence(s) were skipped.)" : "") }));
+          } catch (e) { addMessage({ role: "assistant", error: { message: (e && e.message) || "Could not apply.", details: [], status: (e && e.status) || 0 } }); }
+          finally { setIsLoading(false); }
+        };
+        const pickChoice = async (id, was, now) => {
+          const m = messages.find((x) => x.id === id); if (!m || !m.pending) return;
+          setIsLoading(true);
+          try { await planRules(id, { dataset: m.pending.dataset, text: m.pending.text.split(was).join(now) }); }
+          catch (e) { addMessage({ role: "assistant", error: { message: (e && e.message) || "Could not read that.", details: [], status: (e && e.status) || 0 } }); }
+          finally { setIsLoading(false); }
+        };
+        const rememberSaying = async (id) => {
+          const m = messages.find((x) => x.id === id); if (!m || !m.remember) return;
+          try { await api2({ action: "teach_save", kind: "saying", phrase: m.remember.said, value: m.remember.meant }); setMessages((prev) => prev.map((x) => x.id === id ? { ...x, remember: { ...x.remember, saved: true } } : x)); }
+          catch (e) { setMessages((prev) => prev.map((x) => x.id === id ? { ...x, remember: { ...x.remember, error: (e && e.message) || "Could not save." } } : x)); }
+        };
+        const sendText = async (userText, opts) => {
           if (!userText || isLoading) return;
           if (!demo) {
             const cmd = parseReportCommand(userText);
             if (cmd && (openReport || cmd.title)) return runReportCommand(userText, cmd);
+            const bc = parseBuildCommand(userText);
+            if (bc) return runBuildCommand(userText, bc);
           }
+          const lastMsg = messages[messages.length - 1], priorUser = messages[messages.length - 2];
+          const fixing = !!(opts && opts.chip && CAN_FIX && !demo && lastMsg && lastMsg.needsFix && priorUser && priorUser.role === "user");
+          const rememberOf = fixing ? { said: String(priorUser.text).slice(0, 200), meant: String(userText).slice(0, 300) } : null;
           addMessage({ role: "user", text: userText });
           setInput("");
           setIsLoading(true);
@@ -4615,6 +4763,9 @@
                 sqlArtifact: sqlArt,
                 meta: { role: d.role, tenant: d.tenant_id, cap: d.row_cap, truncated: d.truncated, finops: d.finops },
                 suggestions: Array.isArray(d.suggestions) ? d.suggestions.slice(0, 5) : [],
+                needsFix: !!(d.clarify || d.unmatched),
+                remember: rememberOf && !d.clarify && !d.unmatched ? rememberOf : undefined,
+                learned: d.learned || undefined,
                 diagnostic: d.diagnostic || "",
                 question: userText,
                 simulated: demo,
@@ -4742,7 +4893,7 @@
                   <div className="text-xs font-mono space-y-1">
                     <div data-testid="who-role" className="text-white">{ROLE_LABELS[identity.role] || identity.role}</div>
                     <div className="side-muted truncate" title={identity.email}>{identity.email}</div>
-                    <div data-testid="who-version" className="side-muted opacity-80">Server {identity.version || "older than v35 - redeploy the backend"} · Screen v46</div>
+                    <div data-testid="who-version" className="side-muted opacity-80">Server {identity.version || "older than v35 - redeploy the backend"} · Screen v47</div>
                     <div className="flex gap-3 mt-2">
                       {identity.can_change_password !== false && <button data-testid="change-password-open" onClick={() => setShowPw(true)} className="side-muted hover-w underline">Change password</button>}
                       <button onClick={onSignOut} className="side-muted hover-w underline">Sign out</button>
@@ -4827,9 +4978,23 @@
                           {msg.suggestions && msg.suggestions.length > 0 && msg === messages[messages.length - 1] && (
                             <div className="flex flex-wrap gap-2 mt-3" data-testid="suggestions">
                               {msg.suggestions.map((sg) => (
-                                <button key={sg} data-testid="suggestion" disabled={isLoading} onClick={() => sendText(sg)}
+                                <button key={sg} data-testid="suggestion" disabled={isLoading} onClick={() => sendText(sg, { chip: true })}
                                   className="text-xs border border-[#3D3D3D] hover:border-amber-500 text-[#D0D0D0] px-3 py-1.5 rounded-full disabled:opacity-50">{sg}</button>
                               ))}
+                            </div>
+                          )}
+                          {msg.pending && <PendingRules p={msg.pending} busy={isLoading} onApply={() => applyPending(msg.id)} onPick={(was, now) => pickChoice(msg.id, was, now)} />}
+                          {msg.buildDone && <button data-testid="open-dashboard" onClick={() => setActiveTab("dashboard")} className="mt-3 text-xs border border-[#8ef4b2] text-[#8ef4b2] px-3 py-1.5 rounded-lg">Open the dashboard</button>}
+                          {msg.chips && msg.chips.length > 0 && msg === messages[messages.length - 1] && (
+                            <div className="flex flex-wrap gap-2 mt-3" data-testid="chat-chips">
+                              {msg.chips.map((c) => <button key={c.label} data-testid="chat-chip" disabled={isLoading} onClick={() => sendText(c.send)} className="text-xs border border-[#3D3D3D] hover:border-amber-500 text-[#D0D0D0] px-3 py-1.5 rounded-full disabled:opacity-50">{c.label}</button>)}
+                            </div>
+                          )}
+                          {msg.remember && (
+                            <div data-testid="remember" className="mt-3 text-[11px] text-[#b8c2d6] border-t border-[#2D2D2D] pt-2">
+                              {msg.remember.saved
+                                ? <span data-testid="remember-saved" className="text-[#8ef4b2]">Remembered. From now on, "{msg.remember.said}" means "{msg.remember.meant}" for your whole team.</span>
+                                : <>Did that answer what you meant? <button data-testid="remember-btn" onClick={() => rememberSaying(msg.id)} className="underline text-[#8ef4b2] hover:text-white">Remember it for next time</button>{msg.remember.error && <span className="text-red-300"> {msg.remember.error}</span>}</>}
                             </div>
                           )}
                           {msg.diagnostic && (
