@@ -705,10 +705,15 @@
         }
         return null;
       }
-      // v47: build from the chat. "build me a dashboard of X, Y" and "add a rule that rent must be between 0 and 50000".
+      // ===== v48: the assistant. One engine, used by the chat drawer on Reports and by the review panel on Ask SAMM.
+      // assistPlan(text, ctx) -> { text, card } or null. A card is a plain object the screen shows for review; nothing changes until Keep.
+      // assistAct(card, action, arg, ctx) -> { card, text? } handles every button on a card.
+      const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+      let cardSeq = 0;
+      const newCard = (kind, extra) => ({ id: "c" + ++cardSeq, kind, status: "open", ...extra });
       function parseBuildCommand(text) {
         const t = String(text || "").trim().replace(/[.!]+$/, "");
-        let m = /^(?:please\s+)?(?:can\s+you\s+)?(?:build|make|create|generate|set\s+up|put\s+together)\s+(?:me\s+)?(?:a\s+|an\s+|my\s+|the\s+)?(?:new\s+)?dashboard\s*(?:of|with|showing|that\s+shows|for|about|on|:|-)?\s*(.+)$/i.exec(t);
+        let m = /^(?:(?:please|kindly)\s+)?(?:(?:can|could|would|will)\s+you\s+)?(?:(?:please|kindly)\s+)?(?:build|make|create|generate|set\s+up|put\s+together)\s+(?:me\s+)?(?:a\s+|an\s+|my\s+|the\s+)?(?:new\s+)?dashboard\s*(?:of|with|showing|that\s+shows|for|about|on|:|-)?\s*(.+)$/i.exec(t);
         if (m && m[1].trim().length > 2) return { kind: "dashboard", text: m[1].trim() };
         m = /^(?:please\s+)?(?:add|create|set\s+up|make)\s+(?:a\s+|an\s+|new\s+)*(?:data\s+)?(?:quality\s+)?rules?\s*(?:(?:in|on|for)\s+([^:]{2,60}?)\s*:)?\s*(?:that|:|saying|so\s+that|where)?\s*(.{4,})$/i.exec(t);
         if (m) return { kind: "rule", dataset: (m[1] || "").trim(), text: m[2].trim() };
@@ -716,22 +721,322 @@
         if (m) return { kind: "rule", dataset: (m[1] || "").trim(), text: m[2].trim() };
         return null;
       }
-      function PendingRules({ p, busy, onApply, onPick }) {
+      function parseAssistCommand(text) {
+        const t = String(text || "").trim().replace(/[.!?]+$/, "");
+        const emails = t.match(EMAIL_RE) || [];
+        let m = /^(?:(?:please|kindly)\s+)?(?:(?:can|could|would|will)\s+you\s+)?(?:(?:please|kindly)\s+)?(?:remove|delete|drop|take\s+off)\s+(?:the\s+)?(.+?)\s+tile$/i.exec(t);
+        if (m) return { kind: "tile_remove", name: m[1].trim() };
+        m = /^(?:(?:please|kindly)\s+)?(?:(?:can|could|would|will)\s+you\s+)?(?:(?:please|kindly)\s+)?rename\s+(?:the\s+)?(.+?)\s+tile\s+(?:to|as)\s+["“']?(.+?)["”']?$/i.exec(t);
+        if (m) return { kind: "tile_rename", name: m[1].trim(), to: m[2].trim() };
+        if (/\b(?:publish|send|push|export|share)\b/i.test(t) && /\b(?:power\s*bi|sisense)\b/i.test(t)) {
+          const tool = /sisense/i.test(t) ? "sisense" : "powerbi";
+          const nm = /\b(?:called|named|titled|as)\s+["“']?([^"”',]{3,80}?)["”']?(?:\s+(?:and|then|to|,)|$)/i.exec(t.replace(EMAIL_RE, ""));
+          return { kind: "publish", tool, emails, title: nm ? nm[1].trim() : "" };
+        }
+        m = /^(?:(?:please|kindly)\s+)?(?:(?:can|could|would|will)\s+you\s+)?(?:(?:please|kindly)\s+)?(?:give\s+me|open|show\s+me|show|find|get|pull\s+up|bring\s+up|i\s+want|let\s+me\s+see)\s+(?:me\s+)?(?:the\s+|my\s+|our\s+)?(.+?)\s+report$/i.exec(t);
+        if (m && !/\b(?:and|with|plus|combine|join|merge)\b/i.test(m[1])) return { kind: "open_report", name: m[1].trim() };
+        m = /^(?:(?:please|kindly)\s+)?(?:(?:can|could|would|will)\s+you\s+)?(?:(?:please|kindly)\s+)?(combine|join|merge|put\s+together|select|pick|choose|use|list|find)\s+(.+)$/i.exec(t);
+        if (m && /\b(?:tables?|reports?|customers?|clients?)\b/i.test(m[2])) {
+          let rest = m[2], title = "";
+          const tm = /\s+(?:into|as|to\s+make|to\s+produce)\s+(?:a\s+|an\s+)?(?:new\s+)?report(?:\s+(?:called|named|titled))?\s*["“']?(.*?)["”']?$/i.exec(rest);
+          if (tm) { title = tm[1].trim(); rest = rest.slice(0, tm.index); }
+          const terms = rest.split(/\s*(?:,|;|\band\b|\bplus\b|\bwith\b|\+)\s*/i).map((x) => x.trim()).filter((x) => x.length > 1);
+          return { kind: "sources", verb: m[1].toLowerCase(), terms, title };
+        }
+        return null;
+      }
+      const stamp2 = () => new Date().toISOString().slice(0, 16).replace("T", " ");
+      async function runQuestionsForTiles(items, ctx) {
+        const at = stamp2(); const out = new Array(items.length);
+        const one = async (it, i) => {
+          try {
+            const d = await ctx.api({ action: "query", prompt: it.question });
+            if (d.clarify) out[i] = { ask: { title: it.title, choices: d.clarify.choices || [] } };
+            else if (Array.isArray(d.raw_data_grid) && d.raw_data_grid.length) out[i] = { tile: { id: "t" + Date.now() + "_" + i + "_" + Math.floor(Math.random() * 1e4), title: it.title, rows: d.raw_data_grid.slice(0, 60), at, keep: true } };
+            else out[i] = { fail: it.title + ": SAMM had no table to show for this." + (d && d.report_markdown ? " It said: " + String(d.report_markdown).replace(/[#*_`>]/g, "").replace(/\s+/g, " ").trim().slice(0, 120) : "") };
+          } catch (e) { out[i] = { fail: it.title + ": " + ((e && e.message) || "could not be answered") }; }
+        };
+        for (let i = 0; i < items.length; i += 3) await Promise.all(items.slice(i, i + 3).map((it, j) => one(it, i + j)));
+        return { tiles: out.filter((r) => r && r.tile).map((r) => r.tile), asks: out.filter((r) => r && r.ask).map((r) => r.ask), fails: out.filter((r) => r && r.fail).map((r) => r.fail) };
+      }
+      async function planRulesCard(base, ctx, prev) {
+        const plan = await ctx.api({ action: "vibe_data_plan", dataset: base.dataset || undefined, view: base.dataset ? undefined : (ctx.activeView || ctx.defaultView || undefined), text: base.text });
+        const ds = plan.dataset || base.dataset;
+        return newCard("rules", { ...(prev ? { id: prev.id } : {}), dataset: ds, title: friendlyDs(ds), text: base.text, plan });
+      }
+      async function assistPlan(text, ctx) {
+        const bc = parseBuildCommand(text);
+        const ac = parseAssistCommand(text);
+        // ---- rules (Data Engineers)
+        if (bc && bc.kind === "rule") {
+          if (!ctx.canFix) return { text: "Changing a dataset's data rules is for Data Engineers. Ask yours to add this rule, or ask me a question about the data instead." };
+          let ds = "";
+          if (bc.dataset) {
+            try { const r = await ctx.api({ action: "my_datasets" }); const w = bc.dataset.toLowerCase(); const hit = (r.datasets || []).find((d) => friendlyDs(d.dataset, d.title).toLowerCase().includes(w) || String(d.dataset).toLowerCase().includes(w.replace(/\s+/g, "_"))); if (hit) ds = hit.dataset; } catch (_) { /* use the active view */ }
+          }
+          try { return { text: "Here is what I understood. **Nothing has changed yet.**", card: await planRulesCard({ dataset: ds, text: bc.text }, ctx) }; }
+          catch (e) {
+            let chips = [];
+            try { const r = await ctx.api({ action: "my_datasets" }); chips = (r.datasets || []).slice(0, 5).map((d) => ({ label: friendlyDs(d.dataset, d.title), send: "add a rule in " + friendlyDs(d.dataset, d.title) + ": " + bc.text })); } catch (_) { /* no list */ }
+            return { text: (e && e.message) || "I could not read that rule.", chips };
+          }
+        }
+        // ---- dashboard from words
+        if (bc && bc.kind === "dashboard") {
+          const plan = await ctx.api({ action: "vibe_dashboard_plan", text: bc.text });
+          if (!plan.items.length) return { text: plan.note || "I could not find anything to put on a dashboard. Try: build me a dashboard of total contract value by site, top 5 tenants by rent." };
+          const r = await runQuestionsForTiles(plan.items, ctx);
+          const notes = r.fails.concat((plan.skipped || []).map((k) => k.text + ": " + k.why));
+          if (!r.tiles.length && !r.asks.length) return { text: "I could not build a tile from that." + (notes.length ? "\n\n" + notes.map((n) => "- " + n).join("\n") : "") };
+          return { text: "Here is the dashboard I would add. Tick or untick tiles, then press **Keep**. Nothing is added until you do.", card: newCard("dashboard", { tiles: r.tiles, asks: r.asks, notes }) };
+        }
+        if (!ac) return null;
+        // ---- tile edits
+        if (ac.kind === "tile_remove" || ac.kind === "tile_rename") {
+          const q = ac.name.toLowerCase();
+          const hit = (ctx.tiles || []).filter((t) => String(t.title).toLowerCase().includes(q));
+          if (!hit.length) return { text: "I could not find a tile called \"" + ac.name + "\" on your dashboard." + ((ctx.tiles || []).length ? " Tiles: " + ctx.tiles.map((t) => t.title).slice(0, 8).join(", ") + "." : " The dashboard is empty.") };
+          if (hit.length > 1) return { text: "More than one tile fits \"" + ac.name + "\": " + hit.map((t) => t.title).join(", ") + ". Say the full name.", chips: hit.slice(0, 5).map((t) => ({ label: t.title, send: ac.kind === "tile_remove" ? "remove the " + t.title + " tile" : "rename the " + t.title + " tile to " + ac.to })) };
+          return { text: ac.kind === "tile_remove" ? "I will remove this tile. Press **Keep** to confirm." : "I will rename this tile. Press **Keep** to confirm.", card: newCard("tile_edit", { op: ac.kind === "tile_remove" ? "remove" : "rename", tile: { id: hit[0].id, title: hit[0].title }, to: ac.to || "" }) };
+        }
+        // ---- open a published report by name
+        if (ac.kind === "open_report") {
+          const r = await ctx.api({ action: "sources_find", terms: [ac.name] });
+          const ms = ((r.terms[0] || {}).matches || []).filter((x) => x.kind === "report");
+          if (!ms.length) return null;       // not a report name: let it be an ordinary question
+          return { text: ms.length === 1 ? "Found it." : "I found " + ms.length + " reports that fit. Pick one.", card: newCard("open_report", { matches: ms }) };
+        }
+        // ---- pick Gold tables / customers / reports by name, and combine them into a new report
+        if (ac.kind === "sources") {
+          if (!ac.terms.length) return { text: "Tell me which tables or reports, for example: combine the property table and the landsec rent report." };
+          const r = await ctx.api({ action: "sources_find", terms: ac.terms });
+          const rows = r.terms.map((t) => ({ term: t.term, via: t.via, other: t.other_clients || [], more: t.more || 0, matches: (t.matches || []).map((m, i) => ({ ...m, on: t.matches.length === 1 || t.via === "customer" })) }));
+          if (!rows.some((t) => t.matches.length)) return { text: "I could not find any table or report for: " + ac.terms.join(", ") + ". Try the name as it appears under Datasets or Reports." + (rows.some((t) => t.other.length) ? " (That name is another customer: switch client first.)" : "") };
+          return { text: "Here is what I found for each name. Tick the ones to use" + (ac.verb === "list" || ac.verb === "find" ? "." : ", then press **Combine**. The result is a new report; the originals are not changed."), card: newCard("sources", { rows, title: ac.title || "", client: r.client }) };
+        }
+        // ---- publish to Power BI / Sisense (and e-mail the link)
+        if (ac.kind === "publish") {
+          if (!ctx.canPublish) return { text: "Publishing to Power BI or Sisense is for analysts and above." };
+          if (ac.tool === "powerbi" && !(ctx.tiles || []).some((t) => t.rows && t.rows.length)) return { text: "There is nothing on your dashboard to send yet. Build it first, for example: build me a dashboard of total rent by site." };
+          return { text: (ac.tool === "powerbi" ? "Ready to send your dashboard to Power BI" : "Ready to open Sisense") + (ac.emails.length ? " and e-mail the link to " + ac.emails.join(", ") : "") + ". Press **Keep** to go ahead.", card: newCard("publish", { tool: ac.tool, emails: ac.emails.slice(0, 5), title: ac.title || ((ctx.client || "SAMM") + " report") }) };
+        }
+        return null;
+      }
+      // Reports drawer: anything that is not a command is a question; the answer is previewed as a tile
+      async function assistAsk(text, ctx) {
+        const d = await ctx.api({ action: "query", prompt: text });
+        if (d.clarify) return { text: String(d.report_markdown || "Which one do you mean?").replace(/\*\*/g, ""), chips: (d.clarify.choices || []).map((c) => ({ label: c, send: c })) };
+        if (Array.isArray(d.raw_data_grid) && d.raw_data_grid.length) return { text: "Here is the answer as a tile. Press **Keep** to add it to your dashboard.", card: newCard("dashboard", { tiles: [{ id: "t" + Date.now(), title: String(text).slice(0, 100), rows: d.raw_data_grid.slice(0, 60), at: stamp2(), keep: true }], asks: [], notes: [] }) };
+        return { text: String(d.report_markdown || "I could not answer that.").replace(/[#*_`>]/g, ""), chips: (d.suggestions || []).slice(0, 3).map((c) => ({ label: c, send: c })) };
+      }
+      async function assistAct(card, action, arg, ctx) {
+        if (card.kind === "dashboard") {
+          if (action === "toggle") return { card: { ...card, tiles: card.tiles.map((t) => t.id === arg ? { ...t, keep: !t.keep } : t) } };
+          if (action === "ask") {                       // a tile needed a choice: ask the chosen question and add it to the review
+            const r = await runQuestionsForTiles([{ question: arg, title: arg }], ctx);
+            return { card: { ...card, tiles: card.tiles.concat(r.tiles), asks: card.asks.filter((a) => !(a.choices || []).includes(arg)), notes: card.notes.concat(r.fails) } };
+          }
+          if (action === "keep") {
+            const made = card.tiles.filter((t) => t.keep).map(({ keep, ...t }) => t);
+            if (!made.length) return { card };
+            ctx.setTiles((p) => made.concat(p).slice(0, 12));
+            return { card: { ...card, status: "done", doneText: made.length + " tile(s) added to your dashboard." }, text: "Done. " + made.length + " tile(s) added to your dashboard.", openDashboard: true };
+          }
+        }
+        if (card.kind === "rules") {
+          if (action === "pick") return { card: await planRulesCard({ dataset: card.dataset, text: card.text.split(arg.was).join(arg.now) }, ctx, card) };
+          if (action === "keep") {
+            const r = await ctx.api({ action: "vibe_data_apply", dataset: card.dataset, text: card.text });
+            const t = "Applied " + r.applied.length + " rule(s) to " + card.title + ". The Gold view was rebuilt." + (r.skipped && r.skipped.length ? " (" + r.skipped.length + " sentence(s) were skipped.)" : "");
+            return { card: { ...card, status: "done", doneText: t }, text: t };
+          }
+        }
+        if (card.kind === "tile_edit" && action === "keep") {
+          ctx.setTiles((p) => card.op === "remove" ? p.filter((t) => t.id !== card.tile.id) : p.map((t) => t.id === card.tile.id ? { ...t, title: card.to.slice(0, 120) } : t));
+          const t = card.op === "remove" ? "Removed \"" + card.tile.title + "\"." : "Renamed to \"" + card.to + "\".";
+          return { card: { ...card, status: "done", doneText: t }, text: t };
+        }
+        if (card.kind === "open_report" && action === "open") { ctx.openReport(arg); return { card: { ...card, status: "done", doneText: "Opened." } }; }
+        if (card.kind === "sources") {
+          if (action === "toggle") return { card: { ...card, rows: card.rows.map((t, i) => i !== arg.row ? t : { ...t, matches: t.matches.map((m, j) => j === arg.col ? { ...m, on: !m.on } : m) }) } };
+          if (action === "title") return { card: { ...card, title: arg } };
+          if (action === "keep") {
+            const picked = [];
+            card.rows.forEach((t) => t.matches.forEach((m) => { if (m.on && !picked.some((p) => (p.id || p.view) === (m.id || m.view))) picked.push(m); }));
+            if (!picked.length) return { card };
+            const tiles = [], skipped = [];
+            for (const s of picked.slice(0, 8)) {
+              try {
+                if (s.kind === "report") {
+                  const r = await ctx.api({ action: "report_get", id: s.id });
+                  (r.report.tiles || []).forEach((t) => tiles.push({ title: (picked.length > 1 ? s.title + " · " : "") + (t.title || "Tile"), rows: t.rows || [], at: t.at || stamp2() }));
+                } else {
+                  const r = await ctx.api({ action: "data_peek", dataset: s.dataset, layer: "gold", limit: 50 });
+                  tiles.push({ title: s.title, rows: r.rows || [], at: stamp2() });
+                }
+              } catch (e) { skipped.push(s.title + ": " + ((e && e.message) || "could not be read")); }
+            }
+            const usable = tiles.filter((t) => t.rows && t.rows.length);
+            if (!usable.length) return { card: { ...card, error: "None of the sources had rows I could use." + (skipped.length ? " " + skipped.join("; ") : "") } };
+            const title = (card.title || "Combined report").trim().slice(0, 100);
+            const pub = await ctx.api({ action: "report_publish", title, tiles: usable.slice(0, 12) });
+            const rid = (pub.report && pub.report.id) || pub.id;
+            const t = "Created the report \"" + title + "\" from " + usable.length + " tile(s)." + (usable.length > 12 ? " Only the first 12 were kept." : "") + (skipped.length ? " Skipped: " + skipped.join("; ") : "");
+            if (ctx.reportsChanged) ctx.reportsChanged();
+            return { card: { ...card, status: "done", doneText: t, openId: rid }, text: t };
+          }
+        }
+        if (card.kind === "publish" && action === "keep") {
+          const links = []; const lines = [];
+          if (card.tool === "powerbi") {
+            const r = await ctx.api({ action: "powerbi_publish", title: card.title, tiles: (ctx.tiles || []).filter((t) => t.rows && t.rows.length).map((t) => ({ title: t.title, rows: t.rows, at: t.at })) });
+            lines.push("Sent to Power BI: dataset \"" + r.dataset + "\" with " + r.rows + " row(s) in " + r.tables.length + " table(s).");
+            links.push({ label: "Open in Power BI", href: r.link });
+            if (card.emails.length) {
+              const s = await ctx.api({ action: "powerbi_share", title: card.title, dataset_id: r.dataset_id, tables: r.tables.length, rows: r.rows, to: card.emails.join(", ") });
+              lines.push("E-mailed " + s.sent + " of " + s.results.length + ": " + s.results.map((x) => x.email + (x.sent ? " sent" : " not sent (" + x.error + ")")).join("; ") + ".");
+            }
+          } else {
+            const st = await ctx.api({ action: "sisense_status" });
+            if (!st.ok) return { card: { ...card, error: st.message || "Sisense is not connected yet." } };
+            lines.push("Sisense answers. Your Sisense site reads the Gold layer through its Athena connector.");
+            links.push({ label: "Open in Sisense", href: st.link });
+            if (card.emails.length) {
+              const s = await ctx.api({ action: "sisense_share", title: card.title, to: card.emails.join(", ") });
+              lines.push("E-mailed " + s.sent + " of " + s.results.length + ": " + s.results.map((x) => x.email + (x.sent ? " sent" : " not sent (" + x.error + ")")).join("; ") + ".");
+            }
+          }
+          return { card: { ...card, status: "done", doneText: lines.join(" "), links }, text: lines.join(" ") };
+        }
+        return { card };
+      }
+      function CardLinks({ card }) {
+        return (card.links || []).length ? <div className="flex flex-wrap gap-2 mt-2">{card.links.map((l) => <a key={l.href} data-testid="card-link" href={l.href} target="_blank" rel="noopener noreferrer" className="text-xs border border-[#8ef4b2] text-[#8ef4b2] px-3 py-1.5 rounded-lg hover:bg-[#8ef4b2]/10">{l.label} ↗</a>)}</div> : null;
+      }
+      function ReviewCard({ card, busy, onAct, onDiscard }) {
+        const [title, setTitle] = useState(card.title || "");
+        useEffect(() => { setTitle(card.title || ""); }, [card.id]);
+        const done = card.status === "done";
+        const keepBtn = (label, disabled) => <button data-testid="card-keep" disabled={busy || disabled} onClick={() => onAct(card, "keep")} className="border border-[#8ef4b2] text-[#8ef4b2] text-xs px-3 py-1.5 rounded-lg disabled:opacity-50">{label}</button>;
+        const discardBtn = <button data-testid="card-discard" disabled={busy} onClick={() => onDiscard(card)} className="border border-[#3D3D3D] text-[#b8c2d6] hover:text-white text-xs px-3 py-1.5 rounded-lg disabled:opacity-50">Discard</button>;
+        let body = null, footer = null;
+        if (card.kind === "dashboard") {
+          const n = card.tiles.filter((t) => t.keep).length;
+          body = (
+            <div className="space-y-2">
+              {card.tiles.map((t) => (
+                <label key={t.id} data-testid="card-tile" className="block border border-[#2c385d] rounded-xl p-2 bg-white/5">
+                  <div className="flex items-center gap-2"><input type="checkbox" checked={!!t.keep} disabled={done} onChange={() => onAct(card, "toggle", t.id)} /><span className="text-xs font-semibold text-white truncate">{t.title}</span><span className="text-[10px] text-[#78869b] ml-auto">{t.rows.length} row{t.rows.length === 1 ? "" : "s"}</span></div>
+                  <div className="mt-2"><TileBody rows={t.rows} title={t.title} /></div>
+                </label>
+              ))}
+              {card.asks.map((a, i) => <div key={"a" + i} data-testid="card-ask" className="text-[11px] text-amber-200">"{a.title}" needs one answer first. Tap the amount you mean:<div className="flex flex-wrap gap-2 mt-1">{a.choices.map((c) => <button key={c} data-testid="card-ask-choice" disabled={busy} onClick={() => onAct(card, "ask", c)} className="text-xs border border-[#3D3D3D] hover:border-amber-500 text-[#D0D0D0] px-3 py-1 rounded-full disabled:opacity-50">{c}</button>)}</div></div>)}
+              {card.notes.map((x, i) => <div key={"n" + i} className="text-[11px] text-amber-200">Skipped: {x}</div>)}
+            </div>
+          );
+          footer = !done && <div className="flex gap-2">{keepBtn("Keep " + n + " tile" + (n === 1 ? "" : "s"), n === 0)}{discardBtn}</div>;
+        } else if (card.kind === "rules") {
+          body = (
+            <div className="space-y-1 text-xs">
+              {card.plan.lines.length > 0 && <div className="text-white font-semibold">SAMM understood these rules for {card.title}:</div>}
+              {card.plan.lines.map((l, i) => <div key={i} data-testid="chat-rule-line" className="text-[#D0D0D0]">• {l}</div>)}
+              {card.plan.skipped.map((k, i) => (
+                <div key={"s" + i} data-testid="chat-rule-skipped" className="text-amber-200">Not understood: "{k.text}". {k.why}
+                  {Array.isArray(k.choices) && k.choices.length > 0 && <div className="flex flex-wrap gap-2 mt-1">{k.choices.map((c) => <button key={c.label} data-testid="chat-rule-choice" disabled={busy} onClick={() => onAct(card, "pick", { was: k.text, now: c.text })} className="text-xs border border-[#3D3D3D] hover:border-amber-500 text-[#D0D0D0] px-3 py-1 rounded-full disabled:opacity-50">{c.label}</button>)}</div>}
+                </div>
+              ))}
+              {card.plan.lines.length > 0 && card.plan.can_apply === false && <div data-testid="chat-rule-blocked" className="text-amber-200">You can preview this, but not apply it. {card.plan.cannot_apply_reason}</div>}
+              <div className="text-[10px] text-[#78869b]">Your original rows are never changed.</div>
+            </div>
+          );
+          footer = !done && <div className="flex gap-2">{card.plan.lines.length > 0 && card.plan.can_apply !== false && <button data-testid="chat-rule-apply" disabled={busy} onClick={() => onAct(card, "keep")} className="border border-[#8ef4b2] text-[#8ef4b2] text-xs px-3 py-1.5 rounded-lg disabled:opacity-50">Apply {card.plan.lines.length} rule(s)</button>}{discardBtn}</div>;
+        } else if (card.kind === "open_report") {
+          body = <div className="space-y-2">{card.matches.map((m) => <div key={m.id} data-testid="card-report" className="flex items-center gap-2 border border-[#2c385d] rounded-xl p-2 bg-white/5"><div className="min-w-0"><div className="text-xs font-semibold text-white truncate">{m.title}</div><div className="text-[10px] text-[#78869b]">{m.tiles} tile(s)</div></div><button data-testid="card-open" onClick={() => onAct(card, "open", m.id)} className="ml-auto border border-[#8ef4b2] text-[#8ef4b2] text-xs px-3 py-1 rounded-lg">Open</button></div>)}</div>;
+        } else if (card.kind === "tile_edit") {
+          body = <div className="text-xs text-[#D0D0D0]">{card.op === "remove" ? <>Remove the tile <b>{card.tile.title}</b>.</> : <>Rename <b>{card.tile.title}</b> to <b>{card.to}</b>.</>}</div>;
+          footer = !done && <div className="flex gap-2">{keepBtn("Keep", false)}{discardBtn}</div>;
+        } else if (card.kind === "sources") {
+          const picked = new Set(); card.rows.forEach((t) => t.matches.forEach((m) => { if (m.on) picked.add(m.id || m.view); }));
+          body = (
+            <div className="space-y-2">
+              {card.rows.map((t, i) => (
+                <div key={i} data-testid="card-source-group" className="border border-[#2c385d] rounded-xl p-2 bg-white/5 space-y-1">
+                  <div className="text-[11px] text-[#b8c2d6]">{t.term ? "\"" + t.term + "\"" : "Everything available"}{t.via === "customer" ? " (customer: all of its tables and reports)" : ""}</div>
+                  {t.matches.length === 0 && <div className="text-[11px] text-amber-200">Nothing matched.{t.other.length ? " " + t.other.map((o) => o.name).join(", ") + " is another customer: switch client first." : ""}</div>}
+                  {t.matches.map((m, j) => <label key={(m.id || m.view)} data-testid="card-source" className="flex items-center gap-2 text-xs text-white"><input type="checkbox" checked={!!m.on} disabled={done} onChange={() => onAct(card, "toggle", { row: i, col: j })} /><span className="text-[10px] uppercase tracking-wide text-[#8ef4b2] w-12 shrink-0">{m.kind}</span><span className="truncate">{m.title}</span></label>)}
+                  {t.more > 0 && <div className="text-[10px] text-[#78869b]">{t.more} more not shown. Use a more specific name.</div>}
+                </div>
+              ))}
+              {!done && <input aria-label="New report name" data-testid="card-title" value={card.title} onChange={(e) => onAct(card, "title", e.target.value)} placeholder="Name of the new report" className="w-full bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-amber-500" />}
+            </div>
+          );
+          footer = !done && <div className="flex gap-2">{keepBtn("Combine " + picked.size + " into a new report", picked.size === 0)}{discardBtn}</div>;
+        } else if (card.kind === "publish") {
+          body = <div className="text-xs text-[#D0D0D0] space-y-1"><div>{card.tool === "powerbi" ? "Send the dashboard to Power BI as " : "Open Sisense for "}<b>{card.title}</b>.</div>{card.emails.length > 0 && <div>E-mail the link to: {card.emails.join(", ")}</div>}</div>;
+          footer = !done && <div className="flex gap-2">{keepBtn(card.tool === "powerbi" ? "Send to Power BI" : "Check Sisense and get the link", false)}{discardBtn}</div>;
+        }
         return (
-          <div data-testid="chat-rules" className="mt-3 space-y-1 text-xs">
-            {p.plan.lines.length > 0 && <div className="text-white font-semibold">SAMM understood these rules for {p.title}:</div>}
-            {p.plan.lines.map((l, i) => <div key={i} data-testid="chat-rule-line" className="text-[#D0D0D0]">• {l}</div>)}
-            {p.plan.skipped.map((k, i) => (
-              <div key={"s" + i} data-testid="chat-rule-skipped" className="text-amber-200">
-                Not understood: "{k.text}". {k.why}
-                {Array.isArray(k.choices) && k.choices.length > 0 && <div className="flex flex-wrap gap-2 mt-1">{k.choices.map((c) => <button key={c.label} data-testid="chat-rule-choice" disabled={busy} onClick={() => onPick(k.text, c.text)} className="text-xs border border-[#3D3D3D] hover:border-amber-500 text-[#D0D0D0] px-3 py-1 rounded-full disabled:opacity-50">{c.label}</button>)}</div>}
-              </div>
-            ))}
-            {p.plan.lines.length > 0 && p.plan.can_apply === false && <div data-testid="chat-rule-blocked" className="text-amber-200">You can preview this, but not apply it. {p.plan.cannot_apply_reason}</div>}
-            {p.plan.lines.length > 0 && p.plan.can_apply !== false && !p.done && <button data-testid="chat-rule-apply" disabled={busy} onClick={onApply} className="mt-1 border border-[#8ef4b2] text-[#8ef4b2] text-xs px-3 py-1.5 rounded-lg disabled:opacity-50">Apply {p.plan.lines.length} rule(s)</button>}
-            {p.done && <div data-testid="chat-rule-done" className="text-[#8ef4b2]">{p.done}</div>}
-            {p.plan.lines.length > 0 && !p.done && <div className="text-[10px] text-[#78869b]">Nothing changes until you press Apply. Your original rows are never changed.</div>}
+          <div data-testid="review-card" data-kind={card.kind} className="mt-2 border border-[#2c385d] rounded-2xl p-3 bg-[#13214a]/60 space-y-2">
+            <div className="text-[10px] uppercase tracking-wide text-[#78869b]">Review{done ? " · done" : ""}</div>
+            {body}
+            {card.error && <div data-testid="card-error" className="text-[11px] text-red-300">{card.error}</div>}
+            {done && <div data-testid="card-done" className="text-xs text-[#8ef4b2]">{card.doneText}</div>}
+            {done && card.openId && <button data-testid="card-open-new" onClick={() => onAct(card, "open", card.openId)} className="text-xs border border-[#8ef4b2] text-[#8ef4b2] px-3 py-1.5 rounded-lg">Open the new report</button>}
+            {done && <CardLinks card={card} />}
+            {footer}
           </div>
+        );
+      }
+      // The chat drawer on the Reports tab
+      function AssistantDrawer({ api, role, client, tiles, setTiles, activeView, defaultView, onClose, reportsChanged, onOpenReport }) {
+        const [msgs, setMsgs] = useState([{ id: "w", role: "assistant", text: "Tell me what you want on this page. For example: build me a dashboard of total rent by site, give me the landsec report, combine the property table and the weekly tasks report, publish this to Power BI and email it to anna@company.com." }]);
+        const [input, setInput] = useState("");
+        const [busy, setBusy] = useState(false);
+        const endRef = useRef(null);
+        useEffect(() => { if (endRef.current && endRef.current.scrollIntoView) endRef.current.scrollIntoView({ block: "end" }); }, [msgs.length, busy]);
+        const ctx = { api, canFix: CAN_ONBOARD.includes(role), canPublish: ["analyst", "engineer", "admin", "system_admin"].includes(role), tiles, setTiles, activeView, defaultView, client, reportsChanged, openReport: onOpenReport, mode: "reports" };
+        const add = (m) => setMsgs((p) => [...p, { id: "m" + Date.now() + Math.random(), ...m }]);
+        const send = async (text) => {
+          const t = String(text || input).trim(); if (!t || busy) return;
+          setInput(""); add({ role: "user", text: t }); setBusy(true);
+          try {
+            const r = (await assistPlan(t, ctx)) || (await assistAsk(t, ctx));
+            add({ role: "assistant", text: r.text, card: r.card, chips: r.chips });
+          } catch (e) { add({ role: "assistant", text: (e && e.message) || "That did not work.", err: true }); } finally { setBusy(false); }
+        };
+        const act = async (card, action, arg) => {
+          setBusy(true);
+          try {
+            const r = await assistAct(card, action, arg, ctx);
+            setMsgs((p) => p.map((m) => m.card && m.card.id === card.id ? { ...m, card: r.card } : m));
+            if (r.text && action === "keep") add({ role: "assistant", text: r.text });
+          } catch (e) { setMsgs((p) => p.map((m) => m.card && m.card.id === card.id ? { ...m, card: { ...m.card, error: (e && e.message) || "That did not work." } } : m)); } finally { setBusy(false); }
+        };
+        const discard = (card) => setMsgs((p) => p.map((m) => m.card && m.card.id === card.id ? { ...m, card: null, text: (m.text || "") + " (Discarded.)" } : m));
+        return (
+          <aside data-testid="assistant-drawer" className="fixed inset-y-0 right-0 z-40 w-full sm:w-[440px] flex flex-col bg-[#10193a] border-l border-[#2c385d] shadow-2xl">
+            <div className="h-14 px-4 flex items-center justify-between border-b border-[#2c385d]">
+              <div><div className="text-sm font-bold text-white">Chat with SAMM</div><div className="text-[10px] text-[#8ef4b2] font-mono">Reports{client ? " · " + client : ""}</div></div>
+              <button data-testid="assistant-close" onClick={onClose} aria-label="Close chat" className="border border-[#3D3D3D] hover:border-amber-500 text-white text-xs px-2 py-1 rounded">Close ✕</button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-3 space-y-3">
+              {msgs.map((m) => (
+                <div key={m.id} className={m.role === "user" ? "flex justify-end" : ""}>
+                  <div data-testid={"drawer-" + m.role} className={"max-w-full rounded-xl px-3 py-2 text-xs " + (m.role === "user" ? "bg-blue-600 text-white" : "bg-white/5 border border-[#2c385d] text-[#E3E3E3]") + (m.err ? " border-red-400/60" : "")}>
+                    {m.role === "user" ? m.text : <Markdown text={m.text || ""} />}
+                    {m.card && <ReviewCard card={m.card} busy={busy} onAct={act} onDiscard={discard} />}
+                    {m.chips && m.chips.length > 0 && m === msgs[msgs.length - 1] && <div className="flex flex-wrap gap-2 mt-2">{m.chips.map((c) => <button key={c.label} data-testid="drawer-chip" disabled={busy} onClick={() => send(c.send)} className="text-xs border border-[#3D3D3D] hover:border-amber-500 text-[#D0D0D0] px-3 py-1 rounded-full disabled:opacity-50">{c.label}</button>)}</div>}
+                  </div>
+                </div>
+              ))}
+              {busy && <div className="text-[11px] text-[#78869b] animate-pulse">Working...</div>}
+              <div ref={endRef} />
+            </div>
+            <form onSubmit={(e) => { e.preventDefault(); send(); }} className="p-3 border-t border-[#2c385d] flex gap-2">
+              <input aria-label="Message SAMM" data-testid="drawer-input" value={input} onChange={(e) => setInput(e.target.value)} disabled={busy} placeholder="Describe what you want..." className="flex-1 bg-[#2D2D2D] border border-[#3D3D3D] rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-amber-500 disabled:opacity-50" />
+              <button type="submit" data-testid="drawer-send" disabled={busy || !input.trim()} className="bg-blue-600 hover:bg-blue-500 text-white text-sm px-3 rounded-lg disabled:opacity-50">Send</button>
+            </form>
+          </aside>
         );
       }
       function SplitChat({ messages, since, isLoading, input, setInput, onSend, onClose, label, reportId, onAdd, onOpenArtifact }) {
@@ -956,7 +1261,7 @@
         );
       }
 
-      function DashboardHub({ tiles, onAddTiles, onRemove, onRefresh, onAsk, client, onPublished, api, openId, onOpenHandled, canManage, viewerOnly }) {
+      function DashboardHub({ tiles, onAddTiles, onRemove, onRefresh, onAsk, client, onPublished, api, openId, onOpenHandled, canManage, viewerOnly, setTiles, role, activeView, defaultView }) {
         const [confirmDel, setConfirmDel] = useState("");
         const [dups, setDups] = useState(null);
         const [pubTitle, setPubTitle] = useState("");
@@ -964,6 +1269,8 @@
         const [pubMsg, setPubMsg] = useState("");
         const [pbiLink, setPbiLink] = useState("");
         const [pbi, setPbi] = useState(null);
+        const [assistOpen, setAssistOpen] = useState(false);
+        const [sis, setSis] = useState(null);
         const [pbiOut, setPbiOut] = useState(null);
         const [shareTo, setShareTo] = useState("");
         const [shareNote, setShareNote] = useState("");
@@ -975,10 +1282,13 @@
         const sendShare = async () => {
           setShareBusy(true); setShareErr(""); setShareRes(null);
           try {
-            const r = await api({ action: "powerbi_share", title: pbiOut.title, dataset_id: pbiOut.dataset_id, tables: pbiOut.tables, rows: pbiOut.rows, to: shareTo, note: shareNote, link: shareLink.trim(), grant: shareGrant });
+            const r = pbiOut.tool === "sisense"
+              ? await api({ action: "sisense_share", title: pbiOut.title, to: shareTo, note: shareNote })
+              : await api({ action: "powerbi_share", title: pbiOut.title, dataset_id: pbiOut.dataset_id, tables: pbiOut.tables, rows: pbiOut.rows, to: shareTo, note: shareNote, link: shareLink.trim(), grant: shareGrant });
             setShareRes(r);
           } catch (e) { setShareErr((e && e.message) || "Could not send."); } finally { setShareBusy(false); }
         };
+        useEffect(() => { if (pubTool === "sisense_live" && api && !sis) api({ action: "sisense_status" }).then(setSis).catch((e) => setSis({ ok: false, message: e.message || "Could not check." })); }, [pubTool]);
         useEffect(() => { if (pubTool === "powerbi_live" && api && !pbi) api({ action: "powerbi_status" }).then(setPbi).catch((e) => setPbi({ ok: false, message: e.message || "Could not check." })); }, [pubTool]);
         const [reports, setReports] = useState([]);
         const [viewing, setViewing] = useState(null);
@@ -1000,13 +1310,23 @@
             } catch (e) { setPubMsg("Could not publish: " + (e && e.message ? e.message : e)); }
             return;
           }
+          if (pubTool === "sisense_live") {
+            setPubMsg("Checking Sisense...");
+            try {
+              const r = await api({ action: "sisense_status" });
+              if (!r.ok) { setPubMsg("Sisense is not ready: " + r.message); setPbiLink(""); setPbiOut(null); return; }
+              setPubMsg("Sisense is connected. Your Sisense site reads the Gold layer through its Athena connector; open it with the link.");
+              setPbiLink(r.link); setPbiOut({ tool: "sisense", title }); setShareRes(null); setShareErr("");
+            } catch (e) { setPubMsg("Could not reach Sisense: " + (e && e.message ? e.message : e)); setPbiLink(""); setPbiOut(null); }
+            return;
+          }
           if (pubTool === "powerbi_live") {
             setPubMsg("Sending to Power BI...");
             try {
               const r = await api({ action: "powerbi_publish", title, tiles: tiles.filter((t) => t.rows && t.rows.length).map((t) => ({ title: t.title, rows: t.rows, at: t.at })) });
               setPubMsg("Sent to Power BI: dataset \"" + r.dataset + "\" with " + r.rows + " row(s) in " + r.tables.length + " table(s)" + (r.refreshed ? " (refreshed)" : "") + ". In Power BI open the workspace, choose that dataset and click Create report.");
               setPbiLink(r.link);
-              setPbiOut({ title, dataset_id: r.dataset_id, tables: r.tables.length, rows: r.rows }); setShareRes(null); setShareErr("");
+              setPbiOut({ tool: "powerbi", title, dataset_id: r.dataset_id, tables: r.tables.length, rows: r.rows }); setShareRes(null); setShareErr("");
             } catch (e) { setPubMsg("Could not send to Power BI: " + (e && e.message ? e.message : e)); setPbiLink(""); setPbiOut(null); }
             return;
           }
@@ -1020,10 +1340,15 @@
         const [busy, setBusy] = useState("");
         if (viewing) return <ReportView viewerOnly={viewerOnly} canManage={canManage} doc={viewing} api={api} client={client} onBack={() => { setViewing(null); loadReports(); }} onChanged={loadReports} onAsk={(ds) => onAsk && onAsk("Describe the dataset " + String(ds).replace(/^silver_/, ""))} />;
         return (
+          <>
+          {assistOpen && !viewerOnly && api && setTiles && <AssistantDrawer api={api} role={role} client={client} tiles={tiles} setTiles={setTiles} activeView={activeView} defaultView={defaultView} onClose={() => setAssistOpen(false)} reportsChanged={loadReports} onOpenReport={(id) => openReport(id)} />}
           <div data-testid="dashboard" className="max-w-5xl mx-auto space-y-4 rounded-3xl p-6 border border-[#2c385d]" style={{ background: "radial-gradient(900px 380px at 75% -10%, #1d3a6b 0%, transparent 60%), linear-gradient(180deg,#13214a,#0f1c3f)" }}>
             <div className="flex items-center justify-between gap-3 flex-wrap">
               <img src={DATORE_LOGO} alt="datore" className="h-8" data-testid="dt-logo" />
-              <span className="text-[11px] text-[#78869b]">{client ? "Client: " + client : ""}</span>
+              <div className="flex items-center gap-3">
+                <span className="text-[11px] text-[#78869b]">{client ? "Client: " + client : ""}</span>
+                {!viewerOnly && api && setTiles && <button data-testid="open-assistant" onClick={() => setAssistOpen((o) => !o)} className="border border-[#8ef4b2] text-[#8ef4b2] hover:bg-[#8ef4b2]/10 text-xs px-3 py-1.5 rounded-lg">{assistOpen ? "Close chat" : "Chat with SAMM"}</button>}
+              </div>
             </div>
             <div>
               <h2 data-testid="dt-headline" className="text-3xl md:text-4xl font-extrabold text-white tracking-tight">Every number. <span className="text-[#8ef4b2]">One place.</span></h2>
@@ -1046,22 +1371,23 @@
                 <div className="flex flex-wrap items-center gap-2 text-xs">
                   <input aria-label="Report title" value={pubTitle} onChange={(e) => setPubTitle(e.target.value)} placeholder="Report title" className="bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-white w-64 focus:outline-none focus:border-amber-500" />
                   <select aria-label="Publish to" value={pubTool} onChange={(e) => setPubTool(e.target.value)} className="bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-white">
-                    <option value="samm">SAMM report link (shareable)</option><option value="html">Datore report (.html)</option><option value="powerbi_live">Power BI (send to your workspace)</option><option value="powerbi">Power BI package</option><option value="sisense">Sisense package</option>
+                    <option value="samm">SAMM report link (shareable)</option><option value="html">Datore report (.html)</option><option value="powerbi_live">Power BI (opens as a link)</option><option value="sisense_live">Sisense (opens as a link)</option><option value="powerbi">Power BI package (download)</option><option value="sisense">Sisense package (download)</option>
                   </select>
                   <button data-testid="publish" onClick={publish} className="border border-[#3D3D3D] hover:border-amber-500 text-white px-3 py-1 rounded-md">Publish</button>
                 </div>
+                {pubTool === "sisense_live" && sis && <div data-testid="sis-status" className={"text-[11px] " + (sis.ok ? "text-emerald-300" : "text-amber-200")}>{sis.ok ? sis.message : "Not connected yet: " + sis.message + " You can still pick \"Sisense package\" and import it by hand."}</div>}
                 {pubTool === "powerbi_live" && pbi && <div data-testid="pbi-status" className={"text-[11px] " + (pbi.ok ? "text-emerald-300" : "text-amber-200")}>{pbi.ok ? pbi.message : "Not connected yet: " + pbi.message + " You can still pick \"Power BI package\" and import it by hand."}</div>}
-                {pubMsg && <div data-testid="publish-msg" className="text-[11px] text-emerald-300">{pubMsg}{pbiLink && <> <a data-testid="pbi-link" href={pbiLink} target="_blank" rel="noopener noreferrer" className="underline">Open Power BI</a></>}</div>}
+                {pubMsg && <div data-testid="publish-msg" className="text-[11px] text-emerald-300">{pubMsg}{pbiLink && <> <a data-testid="pbi-link" href={pbiLink} target="_blank" rel="noopener noreferrer" className="underline">{pubTool === "sisense_live" ? "Open Sisense" : "Open Power BI"}</a></>}</div>}
 
-                {pubTool === "powerbi_live" && pbiOut && (
+                {(pubTool === "powerbi_live" || pubTool === "sisense_live") && pbiOut && (pubTool === "sisense_live") === (pbiOut.tool === "sisense") && (
                   <div data-testid="pbi-share" className="border border-[#2c385d] rounded-xl p-3 space-y-2 text-xs">
                     <div className="font-bold text-white">Share this with the people who read the report</div>
                     <div className="text-[11px] text-[#b8c2d6]">SAMM e-mails them a link to open it in Power BI. They sign in with their own work account. Up to 5 addresses, separated by commas.</div>
                     <input aria-label="Send to" data-testid="pbi-share-to" value={shareTo} onChange={(e) => setShareTo(e.target.value)} placeholder="anna@company.com, ben@company.com" className="w-full bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-white focus:outline-none focus:border-amber-500" />
                     <input aria-label="Message" data-testid="pbi-share-note" value={shareNote} onChange={(e) => setShareNote(e.target.value)} maxLength={400} placeholder="Optional message, for example: October numbers are in" className="w-full bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-white focus:outline-none focus:border-amber-500" />
-                    <input aria-label="Report link" data-testid="pbi-share-link" value={shareLink} onChange={(e) => setShareLink(e.target.value)} placeholder="Optional: paste the report's own link from Power BI (https://app.powerbi.com/...)" className="w-full bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-white focus:outline-none focus:border-amber-500" />
-                    <label className="flex items-start gap-2 text-[11px] text-[#b8c2d6]"><input data-testid="pbi-share-grant" type="checkbox" checked={shareGrant} onChange={(e) => setShareGrant(e.target.checked)} className="mt-0.5" /><span>Also give them Viewer access to the Power BI workspace (needs the SAMM app to be an Admin of the workspace). Without this, ask the workspace owner to add them.</span></label>
-                    <div className="text-[10px] text-[#78869b]">Heads up: opening content in a shared Power BI workspace needs a Power BI Pro or Premium Per User licence for each reader, unless the workspace is on Premium or Fabric capacity. If your e-mail service is still in sandbox mode, it only sends to addresses verified there.</div>
+                    {pbiOut.tool !== "sisense" && <input aria-label="Report link" data-testid="pbi-share-link" value={shareLink} onChange={(e) => setShareLink(e.target.value)} placeholder="Optional: paste the report's own link from Power BI (https://app.powerbi.com/...)" className="w-full bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-white focus:outline-none focus:border-amber-500" />}
+                    {pbiOut.tool !== "sisense" && <label className="flex items-start gap-2 text-[11px] text-[#b8c2d6]"><input data-testid="pbi-share-grant" type="checkbox" checked={shareGrant} onChange={(e) => setShareGrant(e.target.checked)} className="mt-0.5" /><span>Also give them Viewer access to the Power BI workspace (needs the SAMM app to be an Admin of the workspace). Without this, ask the workspace owner to add them.</span></label>}
+                    <div className="text-[10px] text-[#78869b]">{pbiOut.tool === "sisense" ? "Heads up: each reader needs a user on your Sisense site. " : "Heads up: opening content in a shared Power BI workspace needs a Power BI Pro or Premium Per User licence for each reader, unless the workspace is on Premium or Fabric capacity. "}If your e-mail service is still in sandbox mode, it only sends to addresses verified there.</div>
                     <button data-testid="pbi-share-send" disabled={shareBusy || !shareTo.trim()} onClick={sendShare} className="border border-[#8ef4b2] text-[#8ef4b2] px-3 py-1 rounded-md disabled:opacity-50">{shareBusy ? "Sending..." : "E-mail the link"}</button>
                     {shareErr && <div data-testid="pbi-share-error" className="text-red-300">{shareErr}</div>}
                     {shareRes && (
@@ -1117,6 +1443,7 @@
               ))}
             </div>
           </div>
+          </>
         );
       }
 
@@ -4649,76 +4976,24 @@
         };
         const api2 = (p) => callBackend(session.url, session.token, p);
         const CAN_FIX = CAN_ONBOARD.includes(role);
-        const setPending = (id, fn) => setMessages((prev) => prev.map((m) => m.id === id ? { ...m, pending: fn(m.pending) } : m));
-        const planRules = async (id, base) => {
+        const [reviewCard, setReviewCard] = useState(null);       // v48: the card shown in the review panel on Ask SAMM
+        const [reviewBusy, setReviewBusy] = useState(false);
+        const assistCtx = () => ({ api: api2, canFix: CAN_FIX, canPublish: ["analyst", "engineer", "admin", "system_admin"].includes(role), tiles, setTiles, activeView, defaultView, client: acting || (identity && identity.tenant_id) || "", mode: "chat",
+          openReport: (id) => { window.dispatchEvent(new CustomEvent("samm-open-report", { detail: { id } })); }, reportsChanged: () => {} });
+        const reviewAct = async (card, action, arg) => {
+          setReviewBusy(true);
           try {
-            const plan = await api2({ action: "vibe_data_plan", dataset: base.dataset || undefined, view: base.dataset ? undefined : (activeView || defaultView || undefined), text: base.text });
-            const ds = plan.dataset || base.dataset;
-            setPending(id, () => ({ dataset: ds, title: friendlyDs(ds), text: base.text, plan, done: "" }));
-          } catch (e) { setPending(id, () => null); throw e; }
+            const r = await assistAct(card, action, arg, assistCtx());
+            setReviewCard(r.card);
+            if (r.text && action === "keep") addMessage({ role: "assistant", text: r.text });
+            if (r.openDashboard) { /* the tiles are on the dashboard; the review card says so and offers the way there */ }
+          } catch (e) { setReviewCard({ ...card, error: (e && e.message) || "That did not work." }); } finally { setReviewBusy(false); }
         };
-        const runBuildCommand = async (userText, bc) => {
+        const runAssist = async (userText, planned) => {
           addMessage({ role: "user", text: userText });
           setInput("");
-          if (bc.kind === "rule" && !CAN_FIX) { addMessage({ role: "assistant", text: "Changing a dataset's data rules is for Data Engineers. Ask yours to add this rule, or ask me a question about the data instead." }); return; }
-          setIsLoading(true);
-          try {
-            if (bc.kind === "dashboard") {
-              const plan = await api2({ action: "vibe_dashboard_plan", text: bc.text });
-              if (!plan.items.length) { addMessage({ role: "assistant", text: plan.note || "I could not find anything to put on a dashboard. Try: build me a dashboard of total contract value by site, top 5 tenants by rent." }); return; }
-              const at = stamp(); const out = new Array(plan.items.length);
-              const one = async (it, i) => {
-                try {
-                  const d = await api2({ action: "query", prompt: it.question });
-                  if (d.clarify) out[i] = { ask: d.clarify, title: it.title };
-                  else if (Array.isArray(d.raw_data_grid) && d.raw_data_grid.length) out[i] = { tile: { id: "t" + Date.now() + "_" + i, title: it.title, rows: d.raw_data_grid.slice(0, 60), at } };
-                  else out[i] = { fail: it.title + ": SAMM had no table to show for this." };
-                } catch (e) { out[i] = { fail: it.title + ": " + ((e && e.message) || "could not be answered") }; }
-              };
-              for (let i = 0; i < plan.items.length; i += 3) await Promise.all(plan.items.slice(i, i + 3).map((it, j) => one(it, i + j)));
-              const made = out.filter((r) => r && r.tile).map((r) => r.tile);
-              if (made.length) setTiles((p) => made.concat(p).slice(0, 12));
-              const asks = out.filter((r) => r && r.ask);
-              const lines = [made.length ? "Done. I added **" + made.length + " tile(s)** to your dashboard: " + made.map((t) => t.title).join(", ") + "." : "I could not build a tile from that."];
-              out.filter((r) => r && r.fail).forEach((r) => lines.push("- Skipped: " + r.fail));
-              (plan.skipped || []).forEach((k) => lines.push("- Skipped: " + k.text + ": " + k.why));
-              if (asks.length) lines.push("", "**" + asks[0].title + "** needs one answer from you first. Tap the amount you mean and I will add it.");
-              addMessage({ role: "assistant", text: lines.join("\n"), buildDone: made.length > 0, chips: asks.length ? asks[0].ask.choices.map((c) => ({ label: c, send: "build me a dashboard of " + c })) : [] });
-            } else {
-              const id = "m" + ++nextId.current;
-              setMessages((prev) => [...prev, { id, role: "assistant", timestamp: stamp(), text: "Reading your rule...", pending: null }]);
-              let ds = "";
-              if (bc.dataset) {
-                try { const r = await api2({ action: "my_datasets" }); const w = bc.dataset.toLowerCase(); const hit = (r.datasets || []).find((d) => friendlyDs(d.dataset, d.title).toLowerCase() === w || String(d.dataset).toLowerCase().includes(w.replace(/\s+/g, "_")) || friendlyDs(d.dataset, d.title).toLowerCase().includes(w)); if (hit) ds = hit.dataset; } catch (_) { /* fall back to the active view */ }
-              }
-              try {
-                await planRules(id, { dataset: ds, text: bc.text });
-                setMessages((prev) => prev.map((m) => m.id === id ? { ...m, text: "Here is what I understood. **Nothing has changed yet.**" } : m));
-              } catch (e) {
-                let chips = [];
-                try { const r = await api2({ action: "my_datasets" }); chips = (r.datasets || []).slice(0, 5).map((d) => ({ label: friendlyDs(d.dataset, d.title), send: "add a rule in " + friendlyDs(d.dataset, d.title) + ": " + bc.text })); } catch (_) { /* no list */ }
-                setMessages((prev) => prev.map((m) => m.id === id ? { ...m, text: (e && e.message) || "I could not read that rule.", chips, error: undefined } : m));
-              }
-            }
-          } catch (e) {
-            addMessage({ role: "assistant", error: { message: (e && e.message) || "That did not work.", details: (e && e.details) || [], status: (e && e.status) || 0 } });
-          } finally { setIsLoading(false); }
-        };
-        const applyPending = async (id) => {
-          const m = messages.find((x) => x.id === id); if (!m || !m.pending) return;
-          setIsLoading(true);
-          try {
-            const r = await api2({ action: "vibe_data_apply", dataset: m.pending.dataset, text: m.pending.text });
-            setPending(id, (p) => ({ ...p, done: "Applied " + r.applied.length + " rule(s) to " + p.title + ". The Gold view was rebuilt." + (r.skipped && r.skipped.length ? " (" + r.skipped.length + " sentence(s) were skipped.)" : "") }));
-          } catch (e) { addMessage({ role: "assistant", error: { message: (e && e.message) || "Could not apply.", details: [], status: (e && e.status) || 0 } }); }
-          finally { setIsLoading(false); }
-        };
-        const pickChoice = async (id, was, now) => {
-          const m = messages.find((x) => x.id === id); if (!m || !m.pending) return;
-          setIsLoading(true);
-          try { await planRules(id, { dataset: m.pending.dataset, text: m.pending.text.split(was).join(now) }); }
-          catch (e) { addMessage({ role: "assistant", error: { message: (e && e.message) || "Could not read that.", details: [], status: (e && e.status) || 0 } }); }
-          finally { setIsLoading(false); }
+          if (planned.card) setReviewCard(planned.card);
+          addMessage({ role: "assistant", text: (planned.text || "") + (planned.card ? "\n\nI put it in the **Review** panel on the right." : ""), chips: planned.chips || [] });
         };
         const rememberSaying = async (id) => {
           const m = messages.find((x) => x.id === id); if (!m || !m.remember) return;
@@ -4730,8 +5005,8 @@
           if (!demo) {
             const cmd = parseReportCommand(userText);
             if (cmd && (openReport || cmd.title)) return runReportCommand(userText, cmd);
-            const bc = parseBuildCommand(userText);
-            if (bc) return runBuildCommand(userText, bc);
+            const planned = await (async () => { setIsLoading(true); try { return await assistPlan(userText, assistCtx()); } catch (e) { return { text: (e && e.message) || "That did not work." }; } finally { setIsLoading(false); } })();
+            if (planned) return runAssist(userText, planned);
           }
           const lastMsg = messages[messages.length - 1], priorUser = messages[messages.length - 2];
           const fixing = !!(opts && opts.chip && CAN_FIX && !demo && lastMsg && lastMsg.needsFix && priorUser && priorUser.role === "user");
@@ -4893,7 +5168,7 @@
                   <div className="text-xs font-mono space-y-1">
                     <div data-testid="who-role" className="text-white">{ROLE_LABELS[identity.role] || identity.role}</div>
                     <div className="side-muted truncate" title={identity.email}>{identity.email}</div>
-                    <div data-testid="who-version" className="side-muted opacity-80">Server {identity.version || "older than v35 - redeploy the backend"} · Screen v47</div>
+                    <div data-testid="who-version" className="side-muted opacity-80">Server {identity.version || "older than v35 - redeploy the backend"} · Screen v48</div>
                     <div className="flex gap-3 mt-2">
                       {identity.can_change_password !== false && <button data-testid="change-password-open" onClick={() => setShowPw(true)} className="side-muted hover-w underline">Change password</button>}
                       <button onClick={onSignOut} className="side-muted hover-w underline">Sign out</button>
@@ -4983,7 +5258,6 @@
                               ))}
                             </div>
                           )}
-                          {msg.pending && <PendingRules p={msg.pending} busy={isLoading} onApply={() => applyPending(msg.id)} onPick={(was, now) => pickChoice(msg.id, was, now)} />}
                           {msg.buildDone && <button data-testid="open-dashboard" onClick={() => setActiveTab("dashboard")} className="mt-3 text-xs border border-[#8ef4b2] text-[#8ef4b2] px-3 py-1.5 rounded-lg">Open the dashboard</button>}
                           {msg.chips && msg.chips.length > 0 && msg === messages[messages.length - 1] && (
                             <div className="flex flex-wrap gap-2 mt-3" data-testid="chat-chips">
@@ -5090,7 +5364,7 @@
                 )}
 
                 {activeTab === "dashboard" && (
-                  <DashboardHub viewerOnly={isRV} canManage={CAN_ONBOARD.includes(role)} client={acting || identity.tenant_id} api={(p) => callBackend(session.url, session.token, p)} openId={openReportId} onOpenHandled={() => setOpenReportId("")} onPublished={(tool, title, n) => callBackend(session.url, session.token, { action: "publish_report", tool, title, tiles: n }).catch(() => {})} tiles={tiles} onAddTiles={(list) => setTiles((p) => list.concat(p).slice(0, 12))} onRemove={(id) => setTiles((p) => p.filter((x) => x.id !== id))} onRefresh={refreshTile}
+                  <DashboardHub setTiles={setTiles} role={role} activeView={activeView} defaultView={defaultView} viewerOnly={isRV} canManage={CAN_ONBOARD.includes(role)} client={acting || identity.tenant_id} api={(p) => callBackend(session.url, session.token, p)} openId={openReportId} onOpenHandled={() => setOpenReportId("")} onPublished={(tool, title, n) => callBackend(session.url, session.token, { action: "publish_report", tool, title, tiles: n }).catch(() => {})} tiles={tiles} onAddTiles={(list) => setTiles((p) => list.concat(p).slice(0, 12))} onRemove={(id) => setTiles((p) => p.filter((x) => x.id !== id))} onRefresh={refreshTile}
                     onAsk={(q) => { setActiveTab("chat"); sendText(q); }} />
                 )}
 
@@ -5144,6 +5418,13 @@
             {split && activeTab !== "chat" && (
               <SplitChat messages={messages} since={split.since + 1} isLoading={isLoading} input={input} setInput={setInput} onSend={sendText}
                 onClose={() => setSplit(null)} label={splitLabel} reportId={split.reportId} onAdd={addToReport} onOpenArtifact={openArtifact} />
+            )}
+            {activeTab === "chat" && reviewCard && (
+              <aside data-testid="review-panel" className="w-[420px] max-w-[90vw] shrink-0 flex flex-col bg-[#10193a] border-l border-[#2c385d]">
+                <div className="h-16 px-4 border-b border-[#2c385d] flex items-center justify-between"><span className="text-xs uppercase text-[#8ef4b2] font-mono">Review</span><button data-testid="review-close" aria-label="Close review panel" onClick={() => setReviewCard(null)} className="text-[#A0A0A0] hover:text-white text-lg px-2">×</button></div>
+                <div className="flex-1 overflow-y-auto p-3"><ReviewCard card={reviewCard} busy={reviewBusy} onAct={reviewAct} onDiscard={() => setReviewCard(null)} />
+                  {reviewCard.status === "done" && reviewCard.kind === "dashboard" && <button data-testid="open-dashboard" onClick={() => setActiveTab("dashboard")} className="mt-3 text-xs border border-[#8ef4b2] text-[#8ef4b2] px-3 py-1.5 rounded-lg">Open the dashboard</button>}</div>
+              </aside>
             )}
             {/* RIGHT-HAND ARTIFACT PANEL */}
             <ArtifactPanel
