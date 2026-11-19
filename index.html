@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <!-- SAMM screen v44 -->
+    <!-- SAMM screen v45 -->
     <title>⚙️ SAMM Core AI Platform</title>
     <!-- React core (pinned, production builds) -->
     <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin></script>
@@ -832,12 +832,110 @@
         );
       }
 
-      function DashboardHub({ tiles, onRemove, onRefresh, onAsk, client, onPublished, api, openId, onOpenHandled, canManage, viewerOnly }) {
+      function TileBody({ rows, title }) {
+        const single = rows.length === 1 ? Object.keys(rows[0]).filter((c) => numOf(rows[0][c]) !== null).slice(0, 4) : [];
+        const charted = !!chartModel(rows);
+        return (
+          <div className="space-y-2 min-w-0">
+            {single.length > 0 && <div data-testid="tile-kpis" className="flex flex-wrap gap-3">{single.map((c) => <div key={c} className="bg-[#8ef4b2]/10 border border-[#8ef4b2]/30 rounded-xl px-4 py-2"><div className="text-2xl font-extrabold text-[#8ef4b2]">{fmtNum(numOf(rows[0][c]))}</div><div className="text-[10px] text-[#b8c2d6]">{c}</div></div>)}</div>}
+            {charted && <AutoChart rows={rows} title={title} />}
+            {!charted && single.length === 0 && <DataTable rows={rows.slice(0, 8)} />}
+          </div>
+        );
+      }
+
+      function VibeDashboard({ api, onAddTiles }) {
+        const [text, setText] = useState("");
+        const [busy, setBusy] = useState(false);
+        const [lines, setLines] = useState([]);
+        const [note, setNote] = useState("");
+        const go = async () => {
+          setBusy(true); setLines([]); setNote("");
+          try {
+            const plan = await api({ action: "vibe_dashboard_plan", text });
+            if (!plan.items.length) { setNote(plan.note || "I could not find anything to ask. Try: total contract value by site, top 5 tenants by rent."); return; }
+            const stamp = new Date().toISOString().slice(0, 16).replace("T", " ");
+            const results = new Array(plan.items.length);
+            let done = 0;
+            setNote("Asking SAMM 0 of " + plan.items.length + "...");
+            const one = async (it, i) => {
+              try {
+                const d = await api({ action: "query", prompt: it.question });
+                if (Array.isArray(d.raw_data_grid) && d.raw_data_grid.length > 0) results[i] = { ok: true, title: it.title, tile: { id: "t" + Date.now() + "_" + i, title: it.title, rows: d.raw_data_grid.slice(0, 60), at: stamp } };
+                else results[i] = { ok: false, text: it.title + ": SAMM had no table to show for this." + (d && d.report_markdown ? " It said: " + String(d.report_markdown).replace(/[#*_`>]/g, "").replace(/\s+/g, " ").trim().slice(0, 140) : " Try rewording it.") };
+              } catch (e) { results[i] = { ok: false, text: it.title + ": " + (e && e.message ? e.message : "could not be answered") }; }
+              done += 1; setNote("Asking SAMM " + done + " of " + plan.items.length + "...");
+            };
+            for (let i = 0; i < plan.items.length; i += 3) await Promise.all(plan.items.slice(i, i + 3).map((it, j) => one(it, i + j)));
+            const made = results.filter((r) => r && r.ok).map((r) => r.tile);
+            const out = results.map((r) => r.ok ? { ok: true, text: r.title } : r);
+            (plan.skipped || []).forEach((k) => out.push({ ok: false, text: k.text + ": " + k.why }));
+            if (made.length) onAddTiles(made);
+            setLines(out);
+            setNote(made.length ? made.length + " tile(s) added below. You can remove any tile, or describe more." : "No tile could be built.");
+          } catch (e) { setNote(e && e.message ? e.message : "Could not build the dashboard."); } finally { setBusy(false); }
+        };
+        return (
+          <div data-testid="vibe-dashboard" className="bg-white/5 border border-[#2c385d] rounded-2xl p-4 space-y-2">
+            <div className="text-sm font-bold text-white">Describe a dashboard</div>
+            <div className="text-[11px] text-[#b8c2d6]">Say what you want to see, in your own words, separated by commas or new lines. Each part is asked as a normal question, so you only see what your role allows.</div>
+            <textarea aria-label="Describe the dashboard" data-testid="vibe-dash-text" rows={3} value={text} onChange={(e) => setText(e.target.value)} placeholder="total contract value by site, monthly trend of rent, top 5 tenants by rent" className="w-full bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-amber-500" />
+            <button data-testid="vibe-dash-go" disabled={busy || !text.trim()} onClick={go} className="border border-[#3D3D3D] hover:border-[#8ef4b2] text-white text-xs px-3 py-1 rounded-md disabled:opacity-50">{busy ? "Building..." : "Build dashboard"}</button>
+            {note && <div data-testid="vibe-dash-note" className="text-[11px] text-emerald-300">{note}</div>}
+            {lines.map((l, i) => <div key={i} data-testid="vibe-dash-line" className={"text-[11px] " + (l.ok ? "text-[#b8c2d6]" : "text-amber-200")}>{l.ok ? "Added: " : "Skipped: "}{l.text}</div>)}
+          </div>
+        );
+      }
+
+      function VibeData({ api }) {
+        const [list, setList] = useState(null);
+        const [ds, setDs] = useState("");
+        const [text, setText] = useState("");
+        const [plan, setPlan] = useState(null);
+        const [busy, setBusy] = useState(false);
+        const [msg, setMsg] = useState("");
+        const [err, setErr] = useState("");
+        useEffect(() => { (async () => { try { const r = await api({ action: "my_datasets" }); setList(r.datasets || []); if ((r.datasets || []).length) setDs(r.datasets[0].dataset); } catch (e) { setErr(e.message || "Could not list datasets."); } })(); }, []);
+        const preview = async () => { setBusy(true); setErr(""); setMsg(""); setPlan(null); try { setPlan(await api({ action: "vibe_data_plan", dataset: ds, text })); } catch (e) { setErr(e.message || "Could not read that."); } finally { setBusy(false); } };
+        const apply = async () => { setBusy(true); setErr(""); try { const r = await api({ action: "vibe_data_apply", dataset: ds, text }); setMsg("Applied " + r.applied.length + " rule(s) to " + friendlyDs(ds) + ". The Gold view was rebuilt" + (r.skipped && r.skipped.length ? " (" + r.skipped.length + " sentence(s) were skipped)." : ".")); setPlan(null); setText(""); } catch (e) { setErr(e.message || "Could not apply."); } finally { setBusy(false); } };
+        const inp = "bg-[#2D2D2D] border border-[#3D3D3D] rounded-md py-1.5 px-2 text-sm text-white";
+        return (
+          <div data-testid="vibe-data" className="space-y-3 rounded-2xl border border-[#2c385d] bg-[#1c2748] p-5">
+            <h3 className="text-sm font-bold text-white">Describe your data rules</h3>
+            <p className="text-xs text-[#b8c2d6]">Write rules or a new calculated column in plain words. You see exactly what SAMM understood first, and nothing changes until you press Apply. Your original rows are never changed.</p>
+            {list && list.length === 0 && <div className="text-xs text-amber-300">No dataset has a Gold view yet. Approve a mapping first.</div>}
+            {list && list.length > 0 && (
+              <div className="space-y-2">
+                <select aria-label="Dataset" data-testid="vibe-data-ds" value={ds} onChange={(e) => { setDs(e.target.value); setPlan(null); }} className={inp}>{list.map((d) => <option key={d.dataset} value={d.dataset}>{friendlyDs(d.dataset, d.title)}</option>)}</select>
+                <textarea aria-label="Describe the data rules" data-testid="vibe-data-text" rows={4} value={text} onChange={(e) => { setText(e.target.value); setPlan(null); }} placeholder={"rent_amount must be between 0 and 50000\nstatus must be one of active, closed\nadd a column margin as revenue minus cost"} className={inp + " w-full text-xs"} />
+                <button data-testid="vibe-data-preview" disabled={busy || !text.trim() || !ds} onClick={preview} className="border border-[#2c385d] hover:border-[#8ef4b2] text-white text-xs px-3 py-1.5 rounded-lg disabled:opacity-50">{busy ? "Reading..." : "Show me what you understood"}</button>
+              </div>
+            )}
+            {err && <div data-testid="vibe-data-error" className="text-xs text-red-300">{err}</div>}
+            {msg && <div data-testid="vibe-data-msg" className="text-xs text-[#8ef4b2]">{msg}</div>}
+            {plan && (
+              <div data-testid="vibe-data-plan" className="space-y-1 text-xs">
+                {plan.lines.length > 0 && <div className="text-white font-semibold">SAMM understood:</div>}
+                {plan.lines.map((l, i) => <div key={i} data-testid="vibe-data-line" className="text-[#b8c2d6]">• {l}</div>)}
+                {plan.skipped.map((k, i) => <div key={"s" + i} data-testid="vibe-data-skipped" className="text-amber-200">Not understood: "{k.text}". {k.why}</div>)}
+                <div className="text-[#78869b]">{plan.note}</div>
+                {plan.lines.length > 0 && plan.can_apply === false && <div data-testid="vibe-data-blocked" className="text-amber-200">You can preview this, but not apply it. {plan.cannot_apply_reason}</div>}
+                {plan.lines.length > 0 && plan.can_apply !== false && <button data-testid="vibe-data-apply" disabled={busy} onClick={apply} className="mt-1 border border-[#8ef4b2] text-[#8ef4b2] text-xs px-3 py-1.5 rounded-lg disabled:opacity-50">Apply {plan.lines.length} rule(s)</button>}
+              </div>
+            )}
+          </div>
+        );
+      }
+
+      function DashboardHub({ tiles, onAddTiles, onRemove, onRefresh, onAsk, client, onPublished, api, openId, onOpenHandled, canManage, viewerOnly }) {
         const [confirmDel, setConfirmDel] = useState("");
         const [dups, setDups] = useState(null);
         const [pubTitle, setPubTitle] = useState("");
         const [pubTool, setPubTool] = useState("samm");
         const [pubMsg, setPubMsg] = useState("");
+        const [pbiLink, setPbiLink] = useState("");
+        const [pbi, setPbi] = useState(null);
+        useEffect(() => { if (pubTool === "powerbi_live" && api && !pbi) api({ action: "powerbi_status" }).then(setPbi).catch((e) => setPbi({ ok: false, message: e.message || "Could not check." })); }, [pubTool]);
         const [reports, setReports] = useState([]);
         const [viewing, setViewing] = useState(null);
         const [repErr, setRepErr] = useState("");
@@ -856,6 +954,15 @@
               setViewing(r.report); loadReports();
               setPubMsg("Published. Copy the link from the report page.");
             } catch (e) { setPubMsg("Could not publish: " + (e && e.message ? e.message : e)); }
+            return;
+          }
+          if (pubTool === "powerbi_live") {
+            setPubMsg("Sending to Power BI...");
+            try {
+              const r = await api({ action: "powerbi_publish", title, tiles: tiles.filter((t) => t.rows && t.rows.length).map((t) => ({ title: t.title, rows: t.rows, at: t.at })) });
+              setPubMsg("Sent to Power BI: dataset \"" + r.dataset + "\" with " + r.rows + " row(s) in " + r.tables.length + " table(s)" + (r.refreshed ? " (refreshed)" : "") + ". In Power BI open the workspace, choose that dataset and click Create report.");
+              setPbiLink(r.link);
+            } catch (e) { setPubMsg("Could not send to Power BI: " + (e && e.message ? e.message : e)); setPbiLink(""); }
             return;
           }
           try {
@@ -887,19 +994,21 @@
                 ))}
               </div>
             )}
+            {!viewerOnly && api && onAddTiles && <VibeDashboard api={api} onAddTiles={onAddTiles} />}
             {tiles.length > 0 && (
               <div data-testid="publish-panel" className="bg-white/5 border border-[#2c385d] rounded-2xl p-4 space-y-2">
                 <div className="text-sm font-bold text-white">Publish this report{client ? " for " + client : ""}</div>
                 <div className="flex flex-wrap items-center gap-2 text-xs">
                   <input aria-label="Report title" value={pubTitle} onChange={(e) => setPubTitle(e.target.value)} placeholder="Report title" className="bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-white w-64 focus:outline-none focus:border-amber-500" />
                   <select aria-label="Publish to" value={pubTool} onChange={(e) => setPubTool(e.target.value)} className="bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-white">
-                    <option value="samm">SAMM report link (shareable)</option><option value="html">Datore report (.html)</option><option value="powerbi">Power BI package</option><option value="sisense">Sisense package</option>
+                    <option value="samm">SAMM report link (shareable)</option><option value="html">Datore report (.html)</option><option value="powerbi_live">Power BI (send to your workspace)</option><option value="powerbi">Power BI package</option><option value="sisense">Sisense package</option>
                   </select>
                   <button data-testid="publish" onClick={publish} className="border border-[#3D3D3D] hover:border-amber-500 text-white px-3 py-1 rounded-md">Publish</button>
                 </div>
-                {pubMsg && <div data-testid="publish-msg" className="text-[11px] text-emerald-300">{pubMsg}</div>}
+                {pubTool === "powerbi_live" && pbi && <div data-testid="pbi-status" className={"text-[11px] " + (pbi.ok ? "text-emerald-300" : "text-amber-200")}>{pbi.ok ? pbi.message : "Not connected yet: " + pbi.message + " You can still pick \"Power BI package\" and import it by hand."}</div>}
+                {pubMsg && <div data-testid="publish-msg" className="text-[11px] text-emerald-300">{pubMsg}{pbiLink && <> <a data-testid="pbi-link" href={pbiLink} target="_blank" rel="noopener noreferrer" className="underline">Open Power BI</a></>}</div>}
 
-                <div className="text-[10px] text-[#707070]">{pubTool === "html" ? "Creates one good-looking report page from the tiles below. Open it in a browser or print it to PDF." : "Creates a ready-to-import package (data files, " + (pubTool === "powerbi" ? "DAX measures" : "a data model description") + " and a styled report.html) from the tiles below."} The numbers are exactly as SAMM calculated them for you.</div>
+                <div className="text-[10px] text-[#707070]">{pubTool === "powerbi_live" ? "Sends the tiles below to your Power BI workspace as a dataset, one table per tile. Then open Power BI, choose the dataset and click Create report." : pubTool === "html" ? "Creates one good-looking report page from the tiles below. Open it in a browser or print it to PDF." : "Creates a ready-to-import package (data files, " + (pubTool === "powerbi" ? "DAX measures" : "a data model description") + " and a styled report.html) from the tiles below."} The numbers are exactly as SAMM calculated them for you.</div>
               </div>
             )}
             <div data-testid="published-reports" className="bg-white/5 border border-[#2c385d] rounded-2xl p-4 space-y-2">
@@ -929,7 +1038,8 @@
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               {tiles.map((t) => (
                 <div key={t.id} data-testid="tile" className="bg-white/5 border border-[#2c385d] rounded-2xl p-4">
-                  <AutoChart rows={t.rows} title={t.title} />
+                  {!chartModel(t.rows) && <div className="text-sm font-bold text-white mb-2">{t.title}</div>}
+                  <TileBody rows={t.rows} title={t.title} />
                   <div className="flex items-center justify-between mt-2 text-[10px] font-mono text-[#707070]">
                     <span>updated {t.at}</span>
                     <span className="flex gap-3">
@@ -978,6 +1088,7 @@
         reports: "M5 20V10M12 20V4M19 20v-7",
         views: "M3 7l9-4 9 4-9 4zM3 12l9 4 9-4M3 17l9 4 9-4",
         home: "M3 11l9-8 9 8M5 10v10h5v-6h4v6h5V10",
+        bucket: "M4 7c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zM4 7l2 12c.2 1 2.7 2 6 2s5.8-1 6-2l2-12",
         plug: "M9 2v6M15 2v6M6 8h12v3a6 6 0 0 1-12 0zM12 17v5",
         onboarding: "M12 3v12M7 10l5 5 5-5M4 20h16",
         auth: "M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z",
@@ -3386,6 +3497,7 @@
         const cards = [
           ["datasets", "Datasets", facts.datasets, "Bronze, Silver and Gold tables SAMM holds", canOnboard, "datasets"],
           ["connections", "Connections", facts.conns, "Files and databases data comes in from", canOnboard, "connections"],
+          ["s3", "S3 bucket", null, "Every file stored for this client", canOnboard, "s3"],
           ["reports", "Reports", tiles.length, "Pinned and published reports", true, "dashboard"],
           ["chat", "Ask SAMM", null, "Ask a question in plain words", role !== "report_viewer", "chat"],
         ].filter((c) => c[4]);
@@ -3393,15 +3505,14 @@
           <div className="max-w-5xl mx-auto space-y-6" data-testid="overview-hub">
             <div className="samm-crumbs" data-testid="overview-crumbs">Clients <span className="opacity-60">/</span> {clientName || client} <span className="opacity-60">/</span> <b>Overview</b></div>
             <div>
-              <div className="samm-eyebrow">Overview</div>
-              <h1 className="samm-h1 mt-1">What SAMM holds for {clientName || client}</h1>
+              <div className="samm-eyebrow" data-testid="overview-eyebrow">Overview</div>
               {facts.last && <p className="text-sm mt-2" style={{ color: "var(--muted)" }} data-testid="overview-last">Newest data arrived {String(facts.last).replace("T", " ").slice(0, 16)}</p>}
             </div>
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4" data-testid="overview-tiles">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5" data-testid="overview-tiles">
               {cards.map(([id, title, n, tip, , go]) => (
                 <button key={id} data-testid={"tile-" + id} onClick={() => onGo(go)} className="samm-card samm-tile">
                   <div className="samm-eyebrow">{title}</div>
-                  <div className="n mt-2">{facts.loading && n === null && id !== "chat" ? "…" : (n === null || n === undefined ? (id === "chat" ? "→" : "–") : n)}</div>
+                  <div className="n mt-2">{facts.loading && n === null && id !== "chat" && id !== "s3" ? "…" : (n === null || n === undefined ? (id === "chat" || id === "s3" ? "→" : "–") : n)}</div>
                   <div className="text-xs mt-1" style={{ color: "var(--muted)" }}>{tip}</div>
                 </button>
               ))}
@@ -3500,7 +3611,7 @@
         const setOrder = (o) => { setOrderState(o); try { localStorage.setItem("samm_hist_order", o); } catch (_) { /* optional */ } };
         const sortedHistory = history.list.slice().sort((a, b) => (String(a.created || "") < String(b.created || "") ? -1 : 1) * (order === "oldest" ? 1 : -1));
         const [viewsTick, setViewsTick] = useState(0);
-        const DS_TABS = ["bronze", "silver", "links", "gold", "s3", "access", "tools"];
+        const DS_TABS = ["bronze", "silver", "links", "gold", "describe", "access", "tools"];
         const [tab, setTab] = useState(mode === "connections" ? "upload" : "gold");
         useEffect(() => { setTab((t) => (mode === "connections" ? "upload" : (DS_TABS.includes(t) ? t : "gold"))); }, [mode]);
         const goTab = (id) => { if (DS_TABS.includes(id) && mode === "connections" && onMode) onMode("datasets"); setTab(id); };
@@ -3728,11 +3839,11 @@
                 <h2 className="text-lg font-bold text-white">{mode === "connections" ? "🔌 Connections" : "🗂 Datasets"}</h2>
                 <p className="text-xs text-[#A0A0A0] mt-1">{mode === "connections"
                   ? "Where data comes in from. Add a file or folder, or connect a database. SAMM keeps the original (Bronze), turns it into rows and columns (Silver), suggests how its columns match your standard names, and builds a view you can ask questions about (Gold). csv, tsv, json, jsonl, txt and Excel are structured; other formats are archived untouched."
-                  : "Everything SAMM holds for this client: the original files (Bronze), the converted tables (Silver), how tables link together, the views you ask questions about (Gold), the files in the S3 bucket, and Teach & test."}</p>
+                  : "Everything SAMM holds for this client: the original files (Bronze), the converted tables (Silver), how tables link together, the views you ask questions about (Gold), who can see what, and Teach & test."}</p>
               </div>
               {mode !== "connections" && (
               <div data-testid="onb-tabs" role="tablist" className="flex flex-wrap gap-2 border-b border-[#2D2D2D] pb-3">
-                {[["bronze", "Bronze", "The original files, exactly as uploaded"], ["silver", "Silver", "Converted tables"], ["links", "Links & drill-down", "Tables that belong together"], ["gold", "Gold views", "Ready to use: ask questions, publish reports"], ["s3", "S3 bucket", "Every file stored for this client (read-only)"], ["access", "Access & review", "Which analysts see which dataset, and rows that break a rule"], ["tools", "Teach & test", "Teach SAMM and self-test"]].map(([id, label, tip]) => (
+                {[["bronze", "Bronze", "The original files, exactly as uploaded"], ["silver", "Silver", "Converted tables"], ["links", "Links & drill-down", "Tables that belong together"], ["gold", "Gold views", "Ready to use: ask questions, publish reports"], ["describe", "Describe rules", "Write data rules or a calculated column in plain words"], ["access", "Access & review", "Which analysts see which dataset, and rows that break a rule"], ["tools", "Teach & test", "Teach SAMM and self-test"]].map(([id, label, tip]) => (
                   <button key={id} role="tab" aria-selected={tab === id} title={tip} data-testid={"onb-tab-" + id} onClick={() => { setTab(id); if (id === "bronze" && !history.open) loadHistory(history.limit); }}
                     className={"px-3 py-1.5 rounded-lg text-xs font-semibold border transition " + (tab === id ? "border-amber-500 bg-amber-500/10 text-amber-300" : "border-[#3D3D3D] text-[#C0C0C0] hover:border-amber-600 hover:text-white")}>{label}</button>
                 ))}
@@ -3938,7 +4049,7 @@
             {tab === "silver" && <SilverTab api={api} onAsk={onAsk} tick={viewsTick} />}
             {tab === "gold" && <GoldViews api={api} onAsk={onAsk} tick={viewsTick} />}
             {tab === "links" && <LinksPanel key={acting} api={api} role={session.identity ? session.identity.role : ""} />}
-            {tab === "s3" && <S3Browser key={acting} api={api} />}
+            {tab === "describe" && <VibeData key={acting} api={api} />}
             {tab === "access" && <AccessReview key={acting} api={api} role={session.identity ? session.identity.role : ""} />}
             {tab === "tools" && (<><TeachPanel api={api} /><SelfTestPanel api={api} /></>)}
 
@@ -4311,7 +4422,7 @@
 
         const [input, setInput] = useState("");
         const [persona, setPersona] = useState("architect");
-        const [activeTab, setActiveTab] = useState(() => { let h = ""; try { h = String(window.location.hash || "").replace("#", ""); } catch (_) { /* optional */ } if (role === "report_viewer") return "dashboard"; return ["overview", "chat", "dashboard", "connections", "datasets", "governance"].includes(h) ? h : "overview"; });
+        const [activeTab, setActiveTab] = useState(() => { let h = ""; try { h = String(window.location.hash || "").replace("#", ""); } catch (_) { /* optional */ } if (role === "report_viewer") return "dashboard"; return ["overview", "chat", "dashboard", "connections", "s3", "datasets", "governance"].includes(h) ? h : "overview"; });
         const [isLoading, setIsLoading] = useState(false);
 
         const [s3Path, setS3Path] = useState("s3://shiftleft-superposition-ingest-vault/CS.json");
@@ -4321,13 +4432,18 @@
         const [defaultView, setDefaultView] = useState("");
         const [activeView, setActiveView] = useState("");
         const dashKey = "samm_dash_" + (demo ? "demo" : (session && session.identity ? session.identity.tenant_id : "x"));
-        const [tiles, setTiles] = useState(() => { try { return JSON.parse(localStorage.getItem("samm_dash_" + (demo ? "demo" : (session && session.identity ? session.identity.tenant_id : "x"))) || "[]"); } catch (_) { return []; } });
-        useEffect(() => { try { if (tiles.length) localStorage.setItem(dashKey, JSON.stringify(tiles.slice(0, 12))); else localStorage.removeItem(dashKey); } catch (_) { /* storage is optional */ } }, [tiles]);
+        // Tiles live under a key that names the client. If the key changes (the identity arrives after the first paint), the tiles are
+        // read again from the new key, and nothing is written or removed until they have been. This stops an early render wiping saved tiles.
+        const loadTiles = (k) => { try { const v = JSON.parse(localStorage.getItem(k) || "[]"); return Array.isArray(v) ? v : []; } catch (_) { return []; } };
+        const [tileStore, setTileStore] = useState(() => ({ key: dashKey, list: loadTiles(dashKey) }));
+        const tiles = tileStore.key === dashKey ? tileStore.list : loadTiles(dashKey);
+        const setTiles = (fn) => setTileStore((s) => { const cur = s.key === dashKey ? s.list : loadTiles(dashKey); return { key: dashKey, list: typeof fn === "function" ? fn(cur) : fn }; });
+        useEffect(() => { if (tileStore.key !== dashKey) return; try { if (tileStore.list.length) localStorage.setItem(dashKey, JSON.stringify(tileStore.list.slice(0, 12))); else localStorage.removeItem(dashKey); } catch (_) { /* storage is optional */ } }, [tileStore, dashKey]);
         const pinTile = (title, rows) => setTiles((p) => [{ id: "t" + Date.now(), title: String(title || "Chart").slice(0, 120), rows: rows.slice(0, 60), at: stamp() }].concat(p).slice(0, 12));
         const refreshTile = async (t) => {
           try {
             const d = await callBackend(session.url, session.token, { action: "query", prompt: t.title });
-            if (Array.isArray(d.raw_data_grid) && d.raw_data_grid.length > 1) setTiles((p) => p.map((x) => x.id === t.id ? { ...x, rows: d.raw_data_grid.slice(0, 60), at: stamp() } : x));
+            if (Array.isArray(d.raw_data_grid) && d.raw_data_grid.length > 0) setTiles((p) => p.map((x) => x.id === t.id ? { ...x, rows: d.raw_data_grid.slice(0, 60), at: stamp() } : x));
           } catch (_) { /* the old numbers stay on the tile */ }
         };
         const [clients, setClients] = useState([]);
@@ -4385,7 +4501,7 @@
         const canGovern = CAN_GOVERN.includes(role);
         const canGold = CAN_GOLD.includes(role);
         useEffect(() => {
-          if ((activeTab === "connections" || activeTab === "datasets") && !canOnboard) setActiveTab("overview");
+          if ((activeTab === "connections" || activeTab === "s3" || activeTab === "datasets") && !canOnboard) setActiveTab("overview");
           if (activeTab === "governance" && !canGovern) setActiveTab("chat");
         }, [role]);
 
@@ -4546,7 +4662,7 @@
 
         const navClass = (tab, disabled) =>
           "navbtn w-full text-left flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition" + (activeTab === tab ? " on" : "");
-        const PAGE_TITLES = { overview: "Overview", chat: "Ask SAMM", dashboard: "Reports", connections: "Connections", datasets: "Datasets", governance: "Authorizations" };
+        const PAGE_TITLES = { overview: "Overview", chat: "Ask SAMM", dashboard: "Reports", connections: "Connections", s3: "S3 bucket", datasets: "Datasets", governance: "Authorizations" };
         const [uiTheme, flipTheme] = useTheme();
         const [showPw, setShowPw] = useState(false);
 
@@ -4593,6 +4709,9 @@
                   {!isRV && <button data-testid="nav-datasets" onClick={() => canOnboard && setActiveTab("datasets")} disabled={!canOnboard} title={canOnboard ? "" : "Requires Data Engineer or above"} className={navClass("datasets", !canOnboard)}>
                     <Icon name="views" /><span>Datasets</span>
                   </button>}
+                  {!isRV && <button data-testid="nav-s3" onClick={() => canOnboard && setActiveTab("s3")} disabled={!canOnboard} title={canOnboard ? "" : "Requires Data Engineer or above"} className={navClass("s3", !canOnboard)}>
+                    <Icon name="bucket" /><span>S3 bucket</span>
+                  </button>}
                   {!isRV && <div className="text-[10px] uppercase tracking-wider side-label font-semibold px-2 pt-4 pb-1">Administrator</div>}
                   {!isRV && <button
                     data-testid="nav-governance"
@@ -4623,7 +4742,7 @@
                   <div className="text-xs font-mono space-y-1">
                     <div data-testid="who-role" className="text-white">{ROLE_LABELS[identity.role] || identity.role}</div>
                     <div className="side-muted truncate" title={identity.email}>{identity.email}</div>
-                    <div data-testid="who-version" className="side-muted opacity-80">Server {identity.version || "older than v35 - redeploy the backend"} · Screen v44</div>
+                    <div data-testid="who-version" className="side-muted opacity-80">Server {identity.version || "older than v35 - redeploy the backend"} · Screen v46</div>
                     <div className="flex gap-3 mt-2">
                       {identity.can_change_password !== false && <button data-testid="change-password-open" onClick={() => setShowPw(true)} className="side-muted hover-w underline">Change password</button>}
                       <button onClick={onSignOut} className="side-muted hover-w underline">Sign out</button>
@@ -4741,6 +4860,13 @@
                     onGo={(t) => setActiveTab(t)} onAsk={(q) => { setActiveTab("chat"); sendText(q); }} />
                 )}
 
+                {activeTab === "s3" && !demo && (
+                  <div className="max-w-5xl mx-auto space-y-6" data-testid="s3-page">
+                    <div className="samm-crumbs">Clients <span className="opacity-60">/</span> {cname(acting || identity.tenant_id)} <span className="opacity-60">/</span> <b>S3 bucket</b></div>
+                    <div className="samm-card p-6"><S3Browser key={acting || identity.tenant_id} api={(p) => callBackend(session.url, session.token, p)} /></div>
+                  </div>
+                )}
+
                 {(activeTab === "connections" || activeTab === "datasets") && !demo && (
                   <OnboardingHub
                     mode={activeTab}
@@ -4799,7 +4925,7 @@
                 )}
 
                 {activeTab === "dashboard" && (
-                  <DashboardHub viewerOnly={isRV} canManage={CAN_ONBOARD.includes(role)} client={acting || identity.tenant_id} api={(p) => callBackend(session.url, session.token, p)} openId={openReportId} onOpenHandled={() => setOpenReportId("")} onPublished={(tool, title, n) => callBackend(session.url, session.token, { action: "publish_report", tool, title, tiles: n }).catch(() => {})} tiles={tiles} onRemove={(id) => setTiles((p) => p.filter((x) => x.id !== id))} onRefresh={refreshTile}
+                  <DashboardHub viewerOnly={isRV} canManage={CAN_ONBOARD.includes(role)} client={acting || identity.tenant_id} api={(p) => callBackend(session.url, session.token, p)} openId={openReportId} onOpenHandled={() => setOpenReportId("")} onPublished={(tool, title, n) => callBackend(session.url, session.token, { action: "publish_report", tool, title, tiles: n }).catch(() => {})} tiles={tiles} onAddTiles={(list) => setTiles((p) => list.concat(p).slice(0, 12))} onRemove={(id) => setTiles((p) => p.filter((x) => x.id !== id))} onRefresh={refreshTile}
                     onAsk={(q) => { setActiveTab("chat"); sendText(q); }} />
                 )}
 
