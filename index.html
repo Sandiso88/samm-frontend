@@ -705,7 +705,7 @@
         }
         return null;
       }
-      // ===== v48/v49: the assistant. One engine, used by the chat drawer on Reports and by the review panel on Ask SAMM.
+      // ===== v48-v50: the assistant. One engine, used by the chat drawer on Reports and by the review panel on Ask SAMM.
       // assistPlan(text, ctx) -> { text, card } or null. A card is a plain object the screen shows for review; nothing changes until Keep.
       // assistAct(card, action, arg, ctx) -> { card, text? } handles every button on a card.
       const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
@@ -988,12 +988,24 @@
         );
       }
       // The chat drawer on the Reports tab
-      function AssistantDrawer({ api, role, client, tiles, setTiles, activeView, defaultView, onClose, reportsChanged, onOpenReport, slot }) {
+      function useWide(min) {
+          const [w, setW] = useState(() => (typeof window !== "undefined" ? window.innerWidth >= min : true));
+          useEffect(() => { const f = () => setW(window.innerWidth >= min); window.addEventListener("resize", f); return () => window.removeEventListener("resize", f); }, [min]);
+          return w;
+        }
+        function AssistantDrawer({ api, role, client, tiles, setTiles, activeView, defaultView, onClose, reportsChanged, onOpenReport, slot }) {
         const [msgs, setMsgs] = useState([{ id: "w", role: "assistant", text: "Tell me what you want on this page. For example: build me a dashboard of total rent by site, give me the landsec report, combine the property table and the weekly tasks report, publish this to Power BI and email it to anna@company.com." }]);
         const [input, setInput] = useState("");
         const [busy, setBusy] = useState(false);
         const endRef = useRef(null);
         useEffect(() => { if (endRef.current && endRef.current.scrollIntoView) endRef.current.scrollIntoView({ block: "end" }); }, [msgs.length, busy]);
+        const wide = useWide(1024);
+        // v50: the whole page (sidebar, top bar and content) shrinks to sit beside the chat, like a docked panel.
+        useEffect(() => {
+          const st = document.createElement("style"); st.setAttribute("data-samm-dock", "");
+          st.textContent = wide ? "body{padding-right:440px!important;box-sizing:border-box}" : "body{padding-bottom:50vh!important;box-sizing:border-box} #root > div{height:50vh!important}";
+          document.head.appendChild(st); return () => { st.remove(); };
+        }, [wide]);
         const pendingCards = msgs.filter((m) => m.card && m.card.status !== "done").length;
         useEffect(() => { if (slot && pendingCards && slot.scrollIntoView) slot.scrollIntoView({ block: "nearest", behavior: "smooth" }); }, [pendingCards]);
         const ctx = { api, canFix: CAN_ONBOARD.includes(role), canPublish: ["analyst", "engineer", "admin", "system_admin"].includes(role), tiles, setTiles, activeView, defaultView, client, reportsChanged, openReport: onOpenReport, mode: "reports" };
@@ -1016,7 +1028,7 @@
         };
         const discard = (card) => setMsgs((p) => p.map((m) => m.card && m.card.id === card.id ? { ...m, card: null, text: (m.text || "") + " (Discarded.)" } : m));
         return (
-          <aside data-testid="assistant-drawer" className="fixed z-40 flex flex-col bg-[#10193a] border-[#2c385d] shadow-2xl inset-x-0 bottom-0 h-[50vh] border-t sm:inset-y-0 sm:left-auto sm:right-0 sm:bottom-auto sm:h-auto sm:w-[440px] sm:border-t-0 sm:border-l">
+          <aside data-testid="assistant-drawer" data-dock={wide ? "right" : "bottom"} style={wide ? { position: "fixed", top: 0, right: 0, bottom: 0, width: 440, zIndex: 40 } : { position: "fixed", left: 0, right: 0, bottom: 0, height: "50vh", zIndex: 40 }} className={"flex flex-col bg-[#10193a] border-[#2c385d] " + (wide ? "border-l" : "border-t")}>
             <div className="h-14 px-4 flex items-center justify-between border-b border-[#2c385d]">
               <div><div className="text-sm font-bold text-white">Chat with SAMM</div><div className="text-[10px] text-[#8ef4b2] font-mono">Reports{client ? " · " + client : ""}</div></div>
               <button data-testid="assistant-close" onClick={onClose} aria-label="Close chat" className="border border-[#3D3D3D] hover:border-amber-500 text-white text-xs px-2 py-1 rounded">Close ✕</button>
@@ -1040,7 +1052,6 @@
             {slot && ReactDOM.createPortal(
               <>{msgs.filter((m) => m.card && m.card.status !== "done").map((m) => (
                 <section key={m.card.id} data-testid="review-mid-card" className="rounded-2xl border border-[#8ef4b2]/40 bg-[#10193a] p-3">
-                  <div className="text-[10px] uppercase text-[#8ef4b2] font-mono mb-2">Review</div>
                   <ReviewCard card={m.card} busy={busy} onAct={act} onDiscard={discard} />
                 </section>))}</>, slot)}
             <form onSubmit={(e) => { e.preventDefault(); send(); }} className="p-3 border-t border-[#2c385d] flex gap-2">
@@ -1352,7 +1363,7 @@
         const [busy, setBusy] = useState("");
         if (viewing) return <ReportView viewerOnly={viewerOnly} canManage={canManage} doc={viewing} api={api} client={client} onBack={() => { setViewing(null); loadReports(); }} onChanged={loadReports} onAsk={(ds) => onAsk && onAsk("Describe the dataset " + String(ds).replace(/^silver_/, ""))} />;
         return (
-          <div data-testid="hub-wrap" className={assistOpen && !viewerOnly ? "pb-[52vh] sm:pb-0 sm:pr-[452px]" : ""}>
+          <div data-testid="hub-wrap">
           {assistOpen && !viewerOnly && api && setTiles && <AssistantDrawer slot={midEl} api={api} role={role} client={client} tiles={tiles} setTiles={setTiles} activeView={activeView} defaultView={defaultView} onClose={() => setAssistOpen(false)} reportsChanged={loadReports} onOpenReport={(id) => openReport(id)} />}
           <div data-testid="dashboard" className="max-w-5xl mx-auto space-y-4 rounded-3xl p-6 border border-[#2c385d]" style={{ background: "radial-gradient(900px 380px at 75% -10%, #1d3a6b 0%, transparent 60%), linear-gradient(180deg,#13214a,#0f1c3f)" }}>
             <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -5182,7 +5193,7 @@
                   <div className="text-xs font-mono space-y-1">
                     <div data-testid="who-role" className="text-white">{ROLE_LABELS[identity.role] || identity.role}</div>
                     <div className="side-muted truncate" title={identity.email}>{identity.email}</div>
-                    <div data-testid="who-version" className="side-muted opacity-80">Server {identity.version || "older than v35 - redeploy the backend"} · Screen v49</div>
+                    <div data-testid="who-version" className="side-muted opacity-80">Server {identity.version || "older than v35 - redeploy the backend"} · Screen v50</div>
                     <div className="flex gap-3 mt-2">
                       {identity.can_change_password !== false && <button data-testid="change-password-open" onClick={() => setShowPw(true)} className="side-muted hover-w underline">Change password</button>}
                       <button onClick={onSignOut} className="side-muted hover-w underline">Sign out</button>
