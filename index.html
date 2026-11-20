@@ -764,6 +764,132 @@
         const ds = plan.dataset || base.dataset;
         return newCard("rules", { ...(prev ? { id: prev.id } : {}), dataset: ds, title: friendlyDs(ds), text: base.text, plan });
       }
+      // ===== v52: republish a report. The numbers are asked again on today's data; the person reviews, then presses Keep.
+      const rpNorm = (rows) => JSON.stringify((rows || []).slice(0, 60).map((r) => Object.fromEntries(Object.entries(r || {}).map(([k, v]) => [k, v == null ? "" : String(v)]))));
+      const rpCols = (rows) => Object.keys((rows && rows[0]) || {}).join("|");
+      async function republishCard(rid, ctx, want) {
+        const got = await ctx.api({ action: "report_get", id: rid });
+        const doc = got.report || {};
+        const isDs = doc.kind === "dataset" && !!doc.dataset;
+        const old = Array.isArray(doc.tiles) ? doc.tiles : [];
+        let tiles = [];
+        if (isDs) {
+          const pv = await ctx.api({ action: "report_republish", id: rid, preview: true });
+          tiles = (pv.tiles || []).map((t, i) => ({ i, title: t.title, oldRows: (old[i] || {}).rows || null, newRows: t.rows || [], same: !!(old[i] && rpNorm(old[i].rows) === rpNorm(t.rows)), sameCols: true, fail: "", mode: "update" }));
+        } else {
+          const out = new Array(old.length);
+          const one = async (t, i) => {
+            const fromSource = async (src) => {
+              try {
+                if (src.kind === "table" && src.dataset) { const r = await ctx.api({ action: "data_peek", dataset: src.dataset, layer: "gold", limit: 50 }); if ((r.rows || []).length) return { rows: r.rows.slice(0, 60), via: "the Gold table " + (src.title || src.dataset), source: src }; }
+                if (src.kind === "report" && src.id) { const r = await ctx.api({ action: "report_get", id: src.id }); const tt = ((r.report || {}).tiles || []).find((x) => x.title === (src.tile || t.title)); if (tt && (tt.rows || []).length) return { rows: tt.rows.slice(0, 60), via: "the current \"" + (r.report.title || src.title) + "\" report", source: src }; }
+              } catch (_) { /* fall through to the next way */ }
+              return null;
+            };
+            const guess = async () => {      // an older combined report did not record where its tiles came from: work it out from the tile's name
+              try {
+                const parts = String(t.title || "").split(" · ");
+                if (parts.length >= 2) {
+                  const f = await ctx.api({ action: "sources_find", terms: [parts[0]] });
+                  const ms = ((f.terms[0] || {}).matches || []).filter((x) => x.kind === "report" && String(x.title || "").toLowerCase() === parts[0].toLowerCase());
+                  if (ms.length === 1) return await fromSource({ kind: "report", id: ms[0].id, tile: parts.slice(1).join(" · "), title: ms[0].title });
+                } else {
+                  const f = await ctx.api({ action: "sources_find", terms: [t.title] });
+                  const ms = ((f.terms[0] || {}).matches || []).filter((x) => x.kind === "table" && String(x.title || "").toLowerCase() === String(t.title).toLowerCase());
+                  if (ms.length === 1) return await fromSource({ kind: "table", dataset: ms[0].dataset, title: ms[0].title });
+                }
+              } catch (_) { /* no luck */ }
+              return null;
+            };
+            if (t.source) { const r = await fromSource(t.source); if (r) { out[i] = r; return; } }
+            let asked = null;
+            try {
+              const d = await ctx.api({ action: "query", prompt: t.question || t.title });
+              if (d && d.clarify) asked = { fail: "it needs one more answer, so it cannot be asked again by itself" };
+              else if (Array.isArray(d.raw_data_grid) && d.raw_data_grid.length) asked = { rows: d.raw_data_grid.slice(0, 60) };
+              else asked = { fail: "SAMM had no table for this question" };
+            } catch (e) { asked = { fail: (e && e.message) || "it could not be answered" }; }
+            if (asked.rows && rpCols(asked.rows) === rpCols(t.rows)) { out[i] = asked; return; }
+            const g = t.source ? null : await guess();
+            out[i] = g || asked;
+          };
+          for (let i = 0; i < old.length; i += 3) await Promise.all(old.slice(i, i + 3).map((t, j) => one(t, i + j)));
+          tiles = old.map((t, i) => {
+            const o = out[i] || {};
+            const sameCols = !!(o.rows && rpCols(o.rows) === rpCols(t.rows));
+            return { i, title: t.title, question: t.question || "", chart: t.chart, source: o.source || t.source || null, via: o.via || "", oldRows: t.rows || [], newRows: o.rows || null, fail: o.fail || "", sameCols, same: !!(o.rows && rpNorm(o.rows) === rpNorm(t.rows)), mode: o.rows && sameCols ? "update" : "keep" };
+          });
+        }
+        const [pb, sis] = await Promise.all([
+          ctx.api({ action: "powerbi_status" }).catch((e) => ({ ok: false, message: (e && e.message) || "Power BI is not available." })),
+          ctx.api({ action: "sisense_status" }).catch((e) => ({ ok: false, message: (e && e.message) || "Sisense is not available." })),
+        ]);
+        return newCard("republish", { reportId: rid, origTitle: doc.title || "Report", title: doc.title || "Report", isDs, dataset: doc.dataset || "", tiles, keepCopy: !!(want && want.keepCopy), pbi: !!(want && want.pbi && pb.ok), sis: !!(want && want.sis && sis.ok),
+          pbiOk: !!pb.ok, pbiMsg: pb.message || "", sisOk: !!sis.ok, sisMsg: sis.message || "", openId: rid, openLabel: "Open the report" });
+      }
+      const RP_ORD = { first: 0, second: 1, third: 2, fourth: 3, fifth: 4 };
+      function rpTileIndex(card, name) {
+        const n = String(name || "").trim().toLowerCase().replace(/^(?:the\s+)?(?:tile\s+)?/, "").replace(/\s+tile$/, "");
+        if (n === "last") return card.tiles.length - 1;
+        if (n in RP_ORD) return RP_ORD[n] < card.tiles.length ? RP_ORD[n] : -1;
+        if (/^\d+$/.test(n)) return +n >= 1 && +n <= card.tiles.length ? +n - 1 : -1;
+        const hit = card.tiles.map((t, i) => [i, String(t.title || "").toLowerCase()]).filter(([, t]) => t === n);
+        const part = card.tiles.map((t, i) => [i, String(t.title || "").toLowerCase()]).filter(([, t]) => t.includes(n));
+        return hit.length === 1 ? hit[0][0] : part.length === 1 ? part[0][0] : -1;
+      }
+      function parseRepublishCommand(text, ctx) {
+        const t = String(text || "").trim().replace(/[.!]+$/, "");
+        const card = ctx && ctx.card && ctx.card.kind === "republish" && ctx.card.status !== "done" ? ctx.card : null;
+        const pre = "^(?:(?:please|kindly)\\s+)?(?:(?:can|could|would|will)\\s+you\\s+)?(?:(?:please|kindly)\\s+)?";
+        if (card) {
+          let m = new RegExp(pre + "(?:rename|call)\\s+(?:it|the\\s+report)\\s*(?:to|as)?\\s*[\"“']?(.{2,120}?)[\"”']?$", "i").exec(t);
+          if (m) return { kind: "rp_edit", op: "title", value: m[1].trim() };
+          if (new RegExp(pre + "(?:also\\s+)?keep\\s+(?:a\\s+|the\\s+)?(?:copy|old(?:er)?(?:\\s+(?:one|version))?|previous(?:\\s+version)?|earlier(?:\\s+version)?)", "i").test(t)) return { kind: "rp_edit", op: "opt", key: "keepCopy", value: true };
+          m = new RegExp(pre + "(?:also\\s+)?(?:send|push|publish)\\s+(?:it\\s+)?(?:also\\s+)?to\\s+(power\\s*bi|sisense)$", "i").exec(t);
+          if (m) return { kind: "rp_edit", op: "opt", key: /sisense/i.test(m[1]) ? "sis" : "pbi", value: true };
+          m = new RegExp(pre + "(?:drop|remove|leave\\s+out|delete)\\s+(?:the\\s+)?(.{1,80}?)(?:\\s+tile)?$", "i").exec(t);
+          if (m && rpTileIndex(card, m[1]) >= 0) return { kind: "rp_edit", op: "mode", mode: "drop", name: m[1] };
+          m = new RegExp(pre + "(?:keep|leave)\\s+(?:the\\s+)?(.{1,80}?)(?:\\s+tile)?\\s+(?:as\\s+it\\s+was|as\\s+is|unchanged|the\\s+same)$", "i").exec(t);
+          if (m && rpTileIndex(card, m[1]) >= 0) return { kind: "rp_edit", op: "mode", mode: "keep", name: m[1] };
+          m = new RegExp(pre + "update\\s+(?:the\\s+)?(.{1,80}?)(?:\\s+tile)?$", "i").exec(t);
+          if (m && rpTileIndex(card, m[1]) >= 0) return { kind: "rp_edit", op: "mode", mode: "update", name: m[1] };
+        }
+        if (!/\bre-?publish(?:ing)?\b/i.test(t) && !/^(?:(?:please|kindly)\s+)?(?:(?:can|could|would|will)\s+you\s+)?(?:(?:please|kindly)\s+)?(?:update|refresh)\s+(?:and\s+)?(?:publish|send)\b/i.test(t)) return null;
+        const opts = { keepCopy: /\bkeep\s+(?:a\s+|the\s+)?(?:copy|old(?:er)?|previous|earlier)/i.test(t), pbi: /power\s*bi/i.test(t), sis: /sisense/i.test(t) };
+        let name = t.replace(new RegExp(pre + "(?:update\\s+and\\s+|refresh\\s+and\\s+)?re-?publish(?:ing)?\\s*", "i"), "").replace(/\b(?:and\s+|also\s+)?(?:keep\s+(?:a\s+|the\s+)?(?:copy|old(?:er)?(?:\s+(?:one|version))?|previous(?:\s+version)?|earlier(?:\s+version)?)(?:\s+of\s+it)?)/i, "").replace(/\b(?:and\s+|also\s+|then\s+)?(?:send|push|publish)(?:\s+it)?\s+(?:again\s+)?to\s+(?:power\s*bi|sisense)\b/ig, "").replace(/\b(?:to|in|on)\s+(?:power\s*bi|sisense)\b/ig, "").replace(/\b(?:again|today'?s?\s+data|with\s+(?:today'?s|the\s+latest|current)\s+(?:data|numbers))\b/ig, "").replace(/^(?:the\s+|my\s+|our\s+)/i, "").replace(/\s+report\s*$/i, "").replace(/\s+/g, " ").trim();
+        if (/^(?:it|this|this\s+one|this\s+report|that|that\s+one)$/i.test(name)) name = "";
+        return { kind: "rp_start", name, opts };
+      }
+      async function republishPlan(rp, ctx) {
+        if (rp.kind === "rp_edit") {
+          const c = ctx.card;
+          if (rp.op === "title") return { text: "Renamed to \"" + rp.value + "\" on the card. Press **Keep** there to republish.", card: { ...c, title: rp.value.slice(0, 120) } };
+          if (rp.op === "opt") {
+            if (rp.key === "pbi" && !c.pbiOk) return { text: "Power BI is not connected: " + (c.pbiMsg || "set it up first.") };
+            if (rp.key === "sis" && !c.sisOk) return { text: "Sisense is not connected: " + (c.sisMsg || "set it up first.") };
+            return { text: rp.key === "keepCopy" ? "I will keep the report as it is now under Older versions." : "I will send it to " + (rp.key === "pbi" ? "Power BI" : "Sisense") + " after it is saved.", card: { ...c, [rp.key]: true } };
+          }
+          if (c.isDs) return { text: "This report is built from a dataset, so all of its tiles are run again together. You can rename it, keep a copy, or send it on." };
+          const i = rpTileIndex(c, rp.name);
+          if (i < 0) return { text: "I could not tell which tile you mean. Say its number or its name." };
+          if (rp.mode === "update" && !c.tiles[i].newRows) return { text: "That tile could not be run again (" + c.tiles[i].fail + "), so it stays as it was." };
+          return { text: (rp.mode === "drop" ? "Dropping" : rp.mode === "keep" ? "Keeping as it was" : "Updating") + " \"" + c.tiles[i].title + "\". Press **Keep** on the card to republish.", card: { ...c, tiles: c.tiles.map((t) => t.i === i ? { ...t, mode: rp.mode } : t) } };
+        }
+        if (!ctx.canPublish) return { text: "Republishing is for analysts and above." };
+        let id = "";
+        if (rp.name) {
+          const r = await ctx.api({ action: "sources_find", terms: [rp.name] });
+          const ms = ((r.terms[0] || {}).matches || []).filter((x) => x.kind === "report");
+          const exact = ms.filter((x) => String(x.title || "").toLowerCase() === rp.name.toLowerCase());
+          if (!ms.length) return { text: "I could not find a report called \"" + rp.name + "\". Say its name as it appears in Published reports." };
+          if (exact.length === 1) id = exact[0].id;
+          else if (ms.length === 1) id = ms[0].id;
+          else return { text: "More than one report fits \"" + rp.name + "\". Which one?", chips: ms.slice(0, 5).map((x) => ({ label: x.title, send: "republish the " + x.title })) };
+        } else id = ctx.currentReportId || "";
+        if (!id) return { text: "Which report? Say its name, for example: republish the Landsec report." };
+        const card = await republishCard(id, ctx, rp.opts);
+        return { text: "I asked every tile again on today's data. **Nothing has been saved yet.** Choose what to do with each tile, then press **Keep**.", card };
+      }
       // ===== v51: people and clients, by chat. Every change is a review card; the server's own rules (roles, own account, client limits) still decide.
       const ADMIN_ROLE_WORDS = [["report_viewer", /report[\s-]*(?:only\s+)?viewer|reports?\s+only|reader/i], ["system_admin", /system\s+admin(?:istrator)?|platform\s+admin(?:istrator)?/i], ["engineer", /data\s+engineer|engineer/i], ["analyst", /analyst/i], ["admin", /admin(?:istrator)?/i], ["viewer", /viewer|view[\s-]*only/i]];
       const adminRoleOf = (txt) => { const t = String(txt || ""); for (const [r, re] of ADMIN_ROLE_WORDS) if (re.test(t)) return r; return ""; };
@@ -862,6 +988,8 @@
       async function assistPlan(text, ctx) {
         const bc = parseBuildCommand(text);
         const ac = parseAssistCommand(text);
+        // ---- republish a report (v52)
+        { const rp = parseRepublishCommand(text, ctx); if (rp) { const r = await republishPlan(rp, ctx); if (r) return r; } }
         // ---- people and clients (Administrators)
         { const ad = parseAdminCommand(text); if (ad && !(bc && bc.kind === "rule")) { const r = await adminPlan(ad, ctx); if (r) return r; } }
         // ---- rules (Data Engineers)
@@ -927,6 +1055,49 @@
         return { text: String(d.report_markdown || "I could not answer that.").replace(/[#*_`>]/g, ""), chips: (d.suggestions || []).slice(0, 3).map((c) => ({ label: c, send: c })) };
       }
       async function assistAct(card, action, arg, ctx) {
+        if (action === "open" && card.openId && card.kind !== "open_report") { ctx.openReport(arg || card.openId); return { card }; }
+        if (card.kind === "republish") {
+          if (card.status === "done") return { card };
+          if (action === "title") return { card: { ...card, title: arg } };
+          if (action === "mode") return { card: { ...card, tiles: card.tiles.map((t) => t.i === arg.i ? { ...t, mode: arg.mode } : t) } };
+          if (action === "opt") return { card: { ...card, [arg.key]: !!arg.value } };
+          if (action === "keep") {
+            const title = (card.title || card.origTitle || "Report").trim().slice(0, 120);
+            let tiles;
+            if (!card.isDs) {
+              tiles = [];
+              card.tiles.forEach((t) => {
+                if (t.mode === "drop") return;
+                const rows = t.mode === "update" && t.newRows ? t.newRows : t.oldRows;
+                if (rows && rows.length) tiles.push({ title: t.title, rows, at: t.mode === "update" && t.newRows ? stamp2() : undefined, ...(t.question ? { question: t.question } : {}), ...(t.source ? { source: t.source } : {}), ...(t.chart === false ? { chart: false } : {}) });
+              });
+              if (!tiles.length) return { card: { ...card, error: "Every tile is dropped, so there is nothing to republish. Set at least one tile to Update or Keep as it was." } };
+            }
+            const r = await ctx.api({ action: "report_republish", id: card.reportId, title, keep_copy: !!card.keepCopy, ...(tiles ? { tiles } : {}) });
+            const rep = r.report || {};
+            try { window.dispatchEvent(new CustomEvent("samm-report-updated", { detail: { report: rep } })); } catch (_) { /* optional */ }
+            if (ctx.reportsChanged) ctx.reportsChanged();
+            const lines = ["Republished \"" + (rep.title || title) + "\" with " + (rep.tiles || []).length + " tile(s). It keeps the same link." + (r.kept_copy ? " The earlier version is saved under Older versions." : "")];
+            const links = [];
+            const push = (rep.tiles || []).filter((t) => t.rows && t.rows.length).map((t) => ({ title: t.title, rows: t.rows, at: t.at }));
+            if (card.pbi) {
+              try {
+                const p = await ctx.api({ action: "powerbi_publish", title: rep.title || title, tiles: push });
+                lines.push("Sent to Power BI: dataset \"" + p.dataset + "\" with " + p.rows + " row(s) in " + p.tables.length + " table(s).");
+                links.push({ label: "Open in Power BI", href: p.link });
+              } catch (e) { lines.push("Saved here, but Power BI did not take it: " + ((e && e.message) || "it failed") + " Say \"send it to Power BI\" to try again."); }
+            }
+            if (card.sis) {
+              try {
+                const st = await ctx.api({ action: "sisense_status" });
+                if (st.ok) { lines.push("Sisense reads the Gold layer through its Athena connector, so it already sees today's data."); links.push({ label: "Open in Sisense", href: st.link }); }
+                else lines.push("Saved here, but Sisense is not ready: " + (st.message || "not connected."));
+              } catch (e) { lines.push("Saved here, but Sisense did not answer: " + ((e && e.message) || "it failed")); }
+            }
+            return { card: { ...card, status: "done", doneText: lines.join(" "), links, openId: card.reportId }, text: lines.join(" ") };
+          }
+          return { card };
+        }
         if (card.kind === "admin" && action === "keep") {
           const r = await ctx.api(card.call);
           let done = "";
@@ -976,10 +1147,10 @@
               try {
                 if (s.kind === "report") {
                   const r = await ctx.api({ action: "report_get", id: s.id });
-                  (r.report.tiles || []).forEach((t) => tiles.push({ title: (picked.length > 1 ? s.title + " · " : "") + (t.title || "Tile"), rows: t.rows || [], at: t.at || stamp2() }));
+                  (r.report.tiles || []).forEach((t) => tiles.push({ title: (picked.length > 1 ? s.title + " · " : "") + (t.title || "Tile"), rows: t.rows || [], at: t.at || stamp2(), source: { kind: "report", id: s.id, tile: t.title || "", title: s.title } }));
                 } else {
                   const r = await ctx.api({ action: "data_peek", dataset: s.dataset, layer: "gold", limit: 50 });
-                  tiles.push({ title: s.title, rows: r.rows || [], at: stamp2() });
+                  tiles.push({ title: s.title, rows: r.rows || [], at: stamp2(), source: { kind: "table", dataset: s.dataset, title: s.title } });
                 }
               } catch (e) { skipped.push(s.title + ": " + ((e && e.message) || "could not be read")); }
             }
@@ -1059,6 +1230,39 @@
           footer = !done && <div className="flex gap-2">{card.plan.lines.length > 0 && card.plan.can_apply !== false && <button data-testid="chat-rule-apply" disabled={busy} onClick={() => onAct(card, "keep")} className="border border-[#8ef4b2] text-[#8ef4b2] text-xs px-3 py-1.5 rounded-lg disabled:opacity-50">Apply {card.plan.lines.length} rule(s)</button>}{discardBtn}</div>;
         } else if (card.kind === "open_report") {
           body = <div className="space-y-2">{card.matches.map((m) => <div key={m.id} data-testid="card-report" className="flex items-center gap-2 border border-[#2c385d] rounded-xl p-2 bg-white/5"><div className="min-w-0"><div className="text-xs font-semibold text-white truncate">{m.title}</div><div className="text-[10px] text-[#78869b]">{m.tiles} tile(s)</div></div><button data-testid="card-open" onClick={() => onAct(card, "open", m.id)} className="ml-auto border border-[#8ef4b2] text-[#8ef4b2] text-xs px-3 py-1 rounded-lg">Open</button></div>)}</div>;
+        } else if (card.kind === "republish") {
+          const nUp = card.tiles.filter((t) => t.mode === "update").length, nDrop = card.tiles.filter((t) => t.mode === "drop").length;
+          const sel = "bg-[#1b2a55] border border-[#2c385d] text-white text-[11px] rounded-lg px-2 py-1";
+          body = (
+            <div className="space-y-2">
+              <div className="text-xs text-white font-semibold">Republish "{card.origTitle}"</div>
+              <div className="text-[11px] text-[#b8c2d6]">{card.isDs ? "This report is built from a dataset. Every tile is run again on today's data." : "Each tile's question was asked again on today's data. Choose what to do with each tile."} The link stays the same.</div>
+              {!done && <input aria-label="Report name" data-testid="card-title" value={card.title} onChange={(e) => onAct(card, "title", e.target.value)} className="w-full bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-amber-500" />}
+              {card.tiles.map((t) => (
+                <div key={t.i} data-testid="card-tile" data-mode={t.mode} className={"border rounded-xl p-2 bg-white/5 " + (t.mode === "drop" ? "border-red-400/40 opacity-60" : "border-[#2c385d]")}>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold text-white truncate">{t.title}</span>
+                    {!card.isDs && !done && <select data-testid="card-tile-mode" aria-label={"What to do with " + t.title} value={t.mode} disabled={busy} onChange={(e) => onAct(card, "mode", { i: t.i, mode: e.target.value })} className={sel + " ml-auto"}><option value="update" disabled={!t.newRows}>Update with today's numbers</option><option value="keep">Keep as it was</option><option value="drop">Drop from the report</option></select>}
+                  </div>
+                  <div data-testid="card-tile-note" className="text-[10px] mt-1 text-[#78869b]">
+                    {t.fail ? <span className="text-amber-200">Could not be run again: {t.fail}. It stays as it was.</span>
+                      : t.newRows && !t.sameCols ? <span className="text-amber-200">The columns are different from before, so it is set to Keep. Choose Update if the new version is right.</span>
+                      : t.same ? "Same numbers as before." + (t.via ? " (from " + t.via + ")" : "") : (t.via ? "From " + t.via + ". " : "") + "Now " + (t.newRows || []).length + " row" + ((t.newRows || []).length === 1 ? "" : "s") + (t.oldRows ? " (was " + t.oldRows.length + ")" : "") + "."}
+                  </div>
+                  {t.newRows && t.mode !== "drop" && !t.same && <div className="mt-2" data-testid="card-tile-preview"><DataTable rows={(t.mode === "keep" && t.oldRows ? t.oldRows : t.newRows).slice(0, 3)} /></div>}
+                </div>
+              ))}
+              {!done && (
+                <div className="space-y-1 text-[11px] text-[#D0D0D0]">
+                  <label data-testid="rp-keep-copy" className="flex items-center gap-2"><input type="checkbox" checked={!!card.keepCopy} onChange={(e) => onAct(card, "opt", { key: "keepCopy", value: e.target.checked })} />Keep the report as it is now, under Older versions</label>
+                  <label data-testid="rp-pbi" className={"flex items-center gap-2 " + (card.pbiOk ? "" : "opacity-60")}><input type="checkbox" disabled={!card.pbiOk} checked={!!card.pbi} onChange={(e) => onAct(card, "opt", { key: "pbi", value: e.target.checked })} />Also send it to Power BI{!card.pbiOk && <span className="text-amber-200"> (not ready: {card.pbiMsg})</span>}</label>
+                  <label data-testid="rp-sis" className={"flex items-center gap-2 " + (card.sisOk ? "" : "opacity-60")}><input type="checkbox" disabled={!card.sisOk} checked={!!card.sis} onChange={(e) => onAct(card, "opt", { key: "sis", value: e.target.checked })} />Also open it in Sisense{!card.sisOk && <span className="text-amber-200"> (not ready: {card.sisMsg})</span>}</label>
+                  <div className="text-[10px] text-[#78869b]">You can also type here: "rename it to ...", "drop the second tile", "keep a copy", "also send it to Power BI".</div>
+                </div>
+              )}
+            </div>
+          );
+          footer = !done && <div className="flex gap-2">{keepBtn("Republish" + (card.isDs ? "" : " " + nUp + " updated" + (nDrop ? ", " + nDrop + " dropped" : "")), false)}{discardBtn}</div>;
         } else if (card.kind === "admin") {
           body = <div className="text-xs text-[#D0D0D0] space-y-1"><div className="text-white font-semibold">{card.heading}</div>{card.facts.map((f, i) => <div key={i} data-testid="card-fact">{f}</div>)}{card.warn && <div data-testid="card-warn" className="text-amber-200">{card.warn}</div>}</div>;
           footer = !done && <div className="flex gap-2">{keepBtn(card.keepLabel || "Keep", false)}{discardBtn}</div>;
@@ -1091,7 +1295,7 @@
             {body}
             {card.error && <div data-testid="card-error" className="text-[11px] text-red-300">{card.error}</div>}
             {done && <div data-testid="card-done" className="text-xs text-[#8ef4b2]">{card.doneText}</div>}
-            {done && card.openId && <button data-testid="card-open-new" onClick={() => onAct(card, "open", card.openId)} className="text-xs border border-[#8ef4b2] text-[#8ef4b2] px-3 py-1.5 rounded-lg">Open the new report</button>}
+            {done && card.openId && <button data-testid="card-open-new" onClick={() => onAct(card, "open", card.openId)} className="text-xs border border-[#8ef4b2] text-[#8ef4b2] px-3 py-1.5 rounded-lg">{card.openLabel || "Open the new report"}</button>}
             {done && <CardLinks card={card} />}
             {footer}
           </div>
@@ -1103,12 +1307,15 @@
           useEffect(() => { const f = () => setW(window.innerWidth >= min); window.addEventListener("resize", f); return () => window.removeEventListener("resize", f); }, [min]);
           return w;
         }
-      function ReportView({ doc, api, client, onBack, onChanged, onAsk, canManage, viewerOnly }) {
+      function ReportView({ doc, api, client, onBack, onChanged, onAsk, canManage, viewerOnly, canRepublish }) {
         const [delAsk, setDelAsk] = useState(false);
         const [cur, setCur] = useState(doc);
         const [busy, setBusy] = useState(false);
         const [msg, setMsg] = useState("");
-        useEffect(() => setCur(doc), [doc]);
+        const [vers, setVers] = useState(null);          // v52: older versions of this report (null = not opened)
+        const [verDoc, setVerDoc] = useState(null);      // an older version being looked at (read only)
+        useEffect(() => { setCur(doc); setVers(null); setVerDoc(null); }, [doc]);
+        const loadVers = async () => { try { const r = await api({ action: "report_versions", id: cur.id }); setVers(r.versions || []); } catch (e) { setMsg(e.message || "Could not list older versions."); } };
         const AC = /^#[0-9a-fA-F]{6}$/.test(cur.accent || "") ? cur.accent : DT.mint;
         const [ren, setRen] = useState(null);
         const [hiers, setHiers] = useState([]);
@@ -1116,7 +1323,7 @@
         useEffect(() => { let on = true; api({ action: "links_list" }).then((r) => { if (on) setHiers(r.hierarchies || []); }).catch(() => { /* older back end: no drill-downs */ }); return () => { on = false; }; }, [cur.client]);
         useEffect(() => { window.dispatchEvent(new CustomEvent("samm-report-opened", { detail: { id: cur.id, title: cur.title, accent: cur.accent || "" } })); }, [cur.id, cur.title, cur.accent]);
         useEffect(() => {
-          const on = (e) => { const r = e.detail && e.detail.report; if (r && r.id === cur.id) { setCur(r); if (onChanged) onChanged(); } };
+          const on = (e) => { const r = e.detail && e.detail.report; if (r && r.id === cur.id) { setCur(r); setVers(null); setVerDoc(null); if (onChanged) onChanged(); } };
           window.addEventListener("samm-report-updated", on);
           return () => window.removeEventListener("samm-report-updated", on);
         }, [cur.id]);
@@ -1125,6 +1332,7 @@
           try { const r = await api({ action: "report_update", id: cur.id, ...patch }); setCur(r.report); setRen(null); if (onChanged) onChanged(); } catch (e) { setMsg(e.message || "Could not update the report."); } finally { setBusy(false); }
         };
         const link = reportLink(cur.id, cur.client || client);
+        const shown = verDoc || cur;
         const refresh = async () => {
           setBusy(true); setMsg("");
           try { const r = await api({ action: "report_refresh", id: cur.id }); setCur(r.report); setMsg("Numbers refreshed."); if (onChanged) onChanged(); } catch (e) { setMsg(e.message || "Could not refresh."); } finally { setBusy(false); }
@@ -1139,7 +1347,7 @@
             {cur.held && cur.held.flagged > 0 && (
               <div data-testid="report-held" className="text-xs rounded-lg border border-amber-400/40 bg-amber-400/10 text-[#ffe08a] px-3 py-2">{cur.held.flagged} of {cur.held.total} rows are flagged for review{cur.held.hidden ? " and held out of these numbers" : " (they are still counted in these numbers)"}.</div>
             )}
-            <h2 data-testid="report-title" className="text-3xl md:text-4xl font-extrabold text-white tracking-tight" dangerouslySetInnerHTML={{ __html: dtHeadline(cur.title).replace('class="hl"', 'style="color:' + AC + '"') }} />
+            <h2 data-testid="report-title" className="text-3xl md:text-4xl font-extrabold text-white tracking-tight" dangerouslySetInnerHTML={{ __html: dtHeadline(shown.title).replace('class="hl"', 'style="color:' + AC + '"') }} />
             {!viewerOnly && <div data-testid="report-style" className="flex flex-wrap items-center gap-2 text-xs">
               {ren === null ? <button data-testid="report-rename" onClick={() => setRen(cur.title)} className="underline text-[#b8c2d6] hover:text-white">Rename</button> : (
                 <span className="flex items-center gap-2">
@@ -1153,6 +1361,8 @@
             </div>}
             <div className="flex flex-wrap gap-2">
               <button onClick={onBack} className={bt} data-testid="report-back">← All reports</button>
+              {canRepublish && !verDoc && <button data-testid="report-republish-open" onClick={() => window.dispatchEvent(new CustomEvent("samm-republish", { detail: { id: cur.id } }))} className={bt}>Republish</button>}
+              {canRepublish && !verDoc && <button data-testid="report-versions" onClick={() => (vers === null ? loadVers() : setVers(null))} className={bt}>{vers === null ? "Older versions" : "Hide older versions"}</button>}
               {cur.kind === "dataset" && !viewerOnly && <button onClick={refresh} disabled={busy} className={bt} data-testid="report-refresh">{busy ? "Refreshing..." : "Refresh numbers"}</button>}
               <button onClick={() => { try { navigator.clipboard.writeText(link); setMsg("Link copied."); } catch (_) { setMsg(link); } }} className={bt} data-testid="report-copy">Copy link</button>
               {canManage && (delAsk
@@ -1168,9 +1378,28 @@
             </div>
             {canManage && !viewerOnly && <ReportShare api={api} reportId={cur.id} />}
             {msg && <div data-testid="report-msg" className="text-[11px] text-[#8ef4b2]">{msg}</div>}
+            {vers !== null && !verDoc && (
+              <div data-testid="versions-panel" className="rounded-xl border border-[#2c385d] bg-white/5 p-3 space-y-1 text-xs">
+                <div className="text-white font-semibold">Older versions</div>
+                {vers.length === 0 && <div data-testid="versions-empty" className="text-[#78869b]">None yet. Tick "Keep the report as it is now" when you republish, and the earlier version is saved here.</div>}
+                {vers.map((v) => (
+                  <div key={v.vid} data-testid="version-row" className="flex flex-wrap items-center gap-3">
+                    <span className="text-white">{v.title}</span><span className="text-[#78869b]">{v.tiles} tile(s) · saved {String(v.saved_at || "").slice(0, 10)} by {v.saved_by}</span>
+                    <button data-testid="version-open" onClick={async () => { try { const r = await api({ action: "report_version_get", id: cur.id, vid: v.vid }); setVerDoc(r.report); } catch (e) { setMsg(e.message || "Could not open that version."); } }} className="underline text-[#8ef4b2] hover:text-white">Open</button>
+                    {canManage && <button data-testid="version-remove" onClick={async () => { try { await api({ action: "report_version_delete", id: cur.id, vid: v.vid }); loadVers(); } catch (e) { setMsg(e.message || "Could not remove it."); } }} className="underline text-[#78869b] hover:text-red-300">Remove</button>}
+                  </div>
+                ))}
+              </div>
+            )}
+            {verDoc && (
+              <div data-testid="version-banner" className="rounded-xl border border-amber-400/40 bg-amber-400/10 text-[#ffe08a] text-xs px-3 py-2 flex flex-wrap items-center gap-3">
+                <span>You are looking at an older version: {verDoc.title}. It cannot be changed.</span>
+                <button data-testid="version-back" onClick={() => setVerDoc(null)} className="underline text-white">Back to the current report</button>
+              </div>
+            )}
             {drillName && <DrillView api={api} name={drillName} reportId={cur.id} onClose={() => setDrillName("")} />}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              {(cur.tiles || []).map((t, i) => {
+              {(shown.tiles || []).map((t, i) => {
                 const single = t.rows.length === 1 ? Object.keys(t.rows[0]).filter((c) => numOf(t.rows[0][c]) !== null).slice(0, 4) : [];
                 return (
                   <div key={i} data-testid="report-tile" className="bg-white/5 border border-[#2c385d] rounded-2xl p-4 space-y-2 min-w-0">
@@ -1178,7 +1407,7 @@
                     {single.length > 0 && <div className="flex flex-wrap gap-3">{single.map((c) => <div key={c} className="bg-[#8ef4b2]/10 border border-[#8ef4b2]/30 rounded-xl px-4 py-2"><div className="text-2xl font-extrabold" style={{ color: AC }}>{fmtNum(numOf(t.rows[0][c]))}</div><div className="text-[11px] text-[#78869b]">{c}</div></div>)}</div>}
                     {t.chart !== false && <AutoChart rows={t.rows} title={t.title} />}
                     <DataTable rows={t.rows.slice(0, 8)} />
-                    {!viewerOnly && <button data-testid="tile-remove-report" onClick={() => update({ remove_tile: i })} className="text-[10px] text-[#78869b] hover:text-white underline">Remove tile</button>}
+                    {!viewerOnly && !verDoc && <button data-testid="tile-remove-report" onClick={() => update({ remove_tile: i })} className="text-[10px] text-[#78869b] hover:text-white underline">Remove tile</button>}
                   </div>
                 );
               })}
@@ -1315,7 +1544,7 @@
           } catch (e) { setPubMsg("Could not create the package: " + (e && e.message ? e.message : e)); }
         };
         const [busy, setBusy] = useState("");
-        if (viewing) return <ReportView viewerOnly={viewerOnly} canManage={canManage} doc={viewing} api={api} client={client} onBack={() => { setViewing(null); loadReports(); }} onChanged={loadReports} onAsk={(ds) => onAsk && onAsk("Describe the dataset " + String(ds).replace(/^silver_/, ""))} />;
+        if (viewing) return <ReportView viewerOnly={viewerOnly} canManage={canManage} canRepublish={!viewerOnly && ["analyst", "engineer", "admin", "system_admin"].includes(role)} doc={viewing} api={api} client={client} onBack={() => { setViewing(null); loadReports(); }} onChanged={loadReports} onAsk={(ds) => onAsk && onAsk("Describe the dataset " + String(ds).replace(/^silver_/, ""))} />;
         return (
           <div data-testid="hub-wrap">
           <div data-testid="dashboard" className="max-w-5xl mx-auto space-y-4 rounded-3xl p-6 border border-[#2c385d]" style={{ background: "radial-gradient(900px 380px at 75% -10%, #1d3a6b 0%, transparent 60%), linear-gradient(180deg,#13214a,#0f1c3f)" }}>
@@ -1393,6 +1622,7 @@
                   <span className="text-white font-semibold">{r.title}</span>
                   <span className="text-[#78869b]">{r.tiles} tile(s) · {String(r.updated || r.created || "").slice(0, 10)} · {r.by}</span>
                   <button data-testid="report-open" onClick={() => openReport(r.id)} className="underline text-[#8ef4b2] hover:text-white">Open</button>
+                  {!viewerOnly && ["analyst", "engineer", "admin", "system_admin"].includes(role) && <button data-testid="report-republish" onClick={() => window.dispatchEvent(new CustomEvent("samm-republish", { detail: { id: r.id } }))} className="underline text-[#8ef4b2] hover:text-white">Republish</button>}
                   {canManage && (confirmDel === r.id
                     ? <span className="flex items-center gap-2"><span className="text-amber-200">Delete this report?</span><button data-testid="report-delete-yes" onClick={async () => { try { await api({ action: "report_delete", id: r.id }); setConfirmDel(""); loadReports(); } catch (e) { setRepErr(e.message || "Could not delete."); } }} className="underline text-red-300">Yes, delete</button><button onClick={() => setConfirmDel("")} className="underline text-[#b8c2d6]">No</button></span>
                     : <button data-testid="report-delete" onClick={() => setConfirmDel(r.id)} className="underline text-[#78869b] hover:text-red-300">Delete</button>)}
@@ -4969,7 +5199,7 @@
         useEffect(() => { if (reviewCard && messagesEndRef.current && messagesEndRef.current.scrollIntoView) messagesEndRef.current.scrollIntoView({ behavior: "smooth" }); }, [reviewCard && reviewCard.id, reviewCard && reviewCard.status]);
         const assistCtx = () => ({ api: api2, canFix: CAN_FIX, canPublish: ["analyst", "engineer", "admin", "system_admin"].includes(role), tiles, setTiles, activeView, defaultView, client: acting || (identity && identity.tenant_id) || "", mode: "chat",
           openReport: (id) => { window.dispatchEvent(new CustomEvent("samm-open-report", { detail: { id } })); }, reportsChanged: () => {},
-          isAdmin: ["admin", "system_admin"].includes(role), isSys: role === "system_admin", me: (identity && identity.email) || "", clientName: cname(acting || (identity && identity.tenant_id) || "") });
+          isAdmin: ["admin", "system_admin"].includes(role), isSys: role === "system_admin", card: reviewCard, currentReportId: (openReport && openReport.id) || "", me: (identity && identity.email) || "", clientName: cname(acting || (identity && identity.tenant_id) || "") });
         const reviewAct = async (card, action, arg) => {
           setReviewBusy(true);
           try {
@@ -4985,6 +5215,18 @@
           if (planned.card) setReviewCard(planned.card);
           addMessage({ role: "assistant", text: (planned.text || "") + (planned.card ? "\n\nIt is in the middle of the page for you to review. Press Keep there, or Discard." : ""), chips: planned.chips || [] });
         };
+        // v52: the Republish buttons (report list and open report) ask for the same review card the chat makes
+        const startRepublish = async (id) => {
+          if (!id || reviewBusy) return;
+          setChatOpen(true); setReviewBusy(true);
+          try {
+            const card = await republishCard(id, assistCtx(), {});
+            setReviewCard(card);
+            addMessage({ role: "assistant", text: "I asked every tile of **" + card.origTitle + "** again on today's data. **Nothing has been saved yet.** The review is in the middle of the page: choose what to do with each tile, then press **Keep**." });
+          } catch (e) { addMessage({ role: "assistant", error: { message: (e && e.message) || "Could not prepare the republish.", details: [], status: (e && e.status) || 0 } }); } finally { setReviewBusy(false); }
+        };
+        const republishRef = useRef(null); republishRef.current = startRepublish;
+        useEffect(() => { const on = (e) => { if (e.detail && e.detail.id && republishRef.current) republishRef.current(e.detail.id); }; window.addEventListener("samm-republish", on); return () => window.removeEventListener("samm-republish", on); }, []);
         const rememberSaying = async (id) => {
           const m = messages.find((x) => x.id === id); if (!m || !m.remember) return;
           try { await api2({ action: "teach_save", kind: "saying", phrase: m.remember.said, value: m.remember.meant }); setMessages((prev) => prev.map((x) => x.id === id ? { ...x, remember: { ...x.remember, saved: true } } : x)); }
@@ -5158,7 +5400,7 @@
                   <div className="text-xs font-mono space-y-1">
                     <div data-testid="who-role" className="text-white">{ROLE_LABELS[identity.role] || identity.role}</div>
                     <div className="side-muted truncate" title={identity.email}>{identity.email}</div>
-                    <div data-testid="who-version" className="side-muted opacity-80">Server {identity.version || "older than v35 - redeploy the backend"} · Screen v51</div>
+                    <div data-testid="who-version" className="side-muted opacity-80">Server {identity.version || "older than v35 - redeploy the backend"} · Screen v52</div>
                     <div className="flex gap-3 mt-2">
                       {identity.can_change_password !== false && <button data-testid="change-password-open" onClick={() => setShowPw(true)} className="side-muted hover-w underline">Change password</button>}
                       <button onClick={onSignOut} className="side-muted hover-w underline">Sign out</button>
