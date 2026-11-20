@@ -1318,6 +1318,11 @@
           useEffect(() => { const f = () => setW(window.innerWidth >= min); window.addEventListener("resize", f); return () => window.removeEventListener("resize", f); }, [min]);
           return w;
         }
+      // v58: opening one panel closes the one that was open before it ("versions", "share", "drill" on a report page)
+      const announcePanel = (name) => { try { window.dispatchEvent(new CustomEvent("samm-panel", { detail: name })); } catch (_) { /* optional */ } };
+      function Chevron({ open, onClick, label, testid }) {
+        return <button type="button" data-testid={testid || "card-collapse"} aria-expanded={open} aria-label={(open ? "Collapse " : "Expand ") + (label || "card")} title={open ? "Collapse" : "Expand"} onClick={onClick} className="shrink-0 w-6 h-6 rounded border border-[#2c385d] hover:border-[#8ef4b2] text-[#b8c2d6] hover:text-white text-xs leading-none flex items-center justify-center">{open ? "\u25BE" : "\u25B8"}</button>;
+      }
       function ReportView({ doc, api, client, onBack, onChanged, onAsk, canManage, viewerOnly, canRepublish }) {
         const [delAsk, setDelAsk] = useState(false);
         const [cur, setCur] = useState(doc);
@@ -1326,6 +1331,25 @@
         const [vers, setVers] = useState(null);          // v52: older versions of this report (null = not opened)
         const [verDoc, setVerDoc] = useState(null);      // an older version being looked at (read only)
         useEffect(() => { setCur(doc); setVers(null); setVerDoc(null); }, [doc]);
+        // v58: Undo / Redo while building the report, and collapsible tiles
+        const [undo, setUndo] = useState([]);
+        const [redo, setRedo] = useState([]);
+        const [shut, setShut] = useState({});
+        const prevDoc = useRef(null);
+        const skipSig = useRef("");
+        const snap = (d) => ({ title: d.title, accent: d.accent || "", tiles: d.tiles || [] });
+        useEffect(() => { setUndo([]); setRedo([]); setShut({}); prevDoc.current = null; }, [cur.id]);
+        useEffect(() => {
+          const p = prevDoc.current;
+          if (p && p.id === cur.id) {
+            const a = JSON.stringify(snap(p)), b = JSON.stringify(snap(cur));
+            if (a !== b) {
+              if (skipSig.current === b) skipSig.current = "";
+              else { setUndo((u) => [...u.slice(-19), snap(p)]); setRedo([]); }
+            }
+          }
+          prevDoc.current = cur;
+        }, [cur]);
         const loadVers = async () => { try { const r = await api({ action: "report_versions", id: cur.id }); setVers(r.versions || []); } catch (e) { setMsg(e.message || "Could not list older versions."); } };
         const AC = /^#[0-9a-fA-F]{6}$/.test(cur.accent || "") ? cur.accent : DT.mint;
         const [ren, setRen] = useState(null);
@@ -1342,6 +1366,32 @@
           setBusy(true); setMsg("");
           try { const r = await api({ action: "report_update", id: cur.id, ...patch }); setCur(r.report); setRen(null); if (onChanged) onChanged(); } catch (e) { setMsg(e.message || "Could not update the report."); } finally { setBusy(false); }
         };
+        const restore = async (s, fromSet, toSet) => {
+          setBusy(true); setMsg("");
+          try {
+            const r = await api({ action: "report_update", id: cur.id, title: s.title, accent: s.accent || "#8ef4b2", set_tiles: s.tiles });
+            skipSig.current = JSON.stringify(snap(r.report));
+            toSet((x) => [...x.slice(-19), snap(cur)]); fromSet((x) => x.slice(0, -1));
+            setCur(r.report); setRen(null); if (onChanged) onChanged();
+          } catch (e) { setMsg(e.message || "Could not undo that."); } finally { setBusy(false); }
+        };
+        const doUndo = () => { if (undo.length && !busy) restore(undo[undo.length - 1], setUndo, setRedo); };
+        const doRedo = () => { if (redo.length && !busy) restore(redo[redo.length - 1], setRedo, setUndo); };
+        const undoRef = useRef(null); undoRef.current = { doUndo, doRedo, can: !viewerOnly && !verDoc };
+        useEffect(() => {
+          const key = (e) => {
+            const t = e.target; if (t && (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable)) return;
+            if (!(e.ctrlKey || e.metaKey) || !undoRef.current.can) return;
+            const k = String(e.key || "").toLowerCase();
+            if (k === "z" && !e.shiftKey) { e.preventDefault(); undoRef.current.doUndo(); }
+            else if ((k === "z" && e.shiftKey) || k === "y") { e.preventDefault(); undoRef.current.doRedo(); }
+          };
+          window.addEventListener("keydown", key); return () => window.removeEventListener("keydown", key);
+        }, []);
+        useEffect(() => {
+          const on = (e) => { if (e.detail !== "versions") setVers(null); if (e.detail !== "drill") setDrillName(""); };
+          window.addEventListener("samm-panel", on); return () => window.removeEventListener("samm-panel", on);
+        }, []);
         const link = reportLink(cur.id, cur.client || client);
         const shown = verDoc || cur;
         const refresh = async () => {
@@ -1372,7 +1422,9 @@
             </div>}
             <div className="flex flex-wrap gap-2">
               <button onClick={onBack} className={bt} data-testid="report-back">← All reports</button>
-              {canRepublish && !verDoc && <button data-testid="report-versions" onClick={() => (vers === null ? loadVers() : setVers(null))} className={bt}>{vers === null ? "Older versions" : "Hide older versions"}</button>}
+              {canRepublish && !verDoc && <button data-testid="report-versions" onClick={() => { if (vers === null) { announcePanel("versions"); loadVers(); } else setVers(null); }} className={bt}>{vers === null ? "Older versions" : "Hide older versions"}</button>}
+              {!viewerOnly && !verDoc && <><button data-testid="report-undo" disabled={busy || undo.length === 0} title="Undo the last change to this report (Ctrl+Z)" onClick={doUndo} className={bt}>{"\u21B6"} Undo</button><button data-testid="report-redo" disabled={busy || redo.length === 0} title="Put back what you just undid (Ctrl+Shift+Z)" onClick={doRedo} className={bt}>Redo {"\u21B7"}</button></>}
+              {(shown.tiles || []).length > 1 && <button data-testid="report-collapse-all" onClick={() => { const all = (shown.tiles || []).every((_, i) => shut[i]); const n = {}; (shown.tiles || []).forEach((_, i) => { n[i] = !all; }); setShut(n); }} className={bt}>{(shown.tiles || []).every((_, i) => shut[i]) ? "Expand all" : "Collapse all"}</button>}
               {cur.kind === "dataset" && !viewerOnly && <button onClick={refresh} disabled={busy} className={bt} data-testid="report-refresh">{busy ? "Refreshing..." : "Refresh numbers"}</button>}
               <button onClick={() => { try { navigator.clipboard.writeText(link); setMsg("Link copied."); } catch (_) { setMsg(link); } }} className={bt} data-testid="report-copy">Copy link</button>
               {canManage && (delAsk
@@ -1380,7 +1432,7 @@
                 : <button data-testid="report-del" onClick={() => setDelAsk(true)} className={bt}>Delete report</button>)}
               <button onClick={() => downloadBlob("samm-report-" + String(cur.title || "report").replace(/[^A-Za-z0-9]+/g, "_").slice(0, 30) + ".html", new Blob([reportHtml(cur.title, cur.client || client, cur.tiles || [], cur.accent)], { type: "text/html" }))} className={bt} data-testid="report-download">Download page</button>
               {hiers.length > 0 && (
-                <select aria-label="Drill down" data-testid="report-drill" value={drillName} onChange={(e) => setDrillName(e.target.value)} className="bg-[#1b2a55] border border-[#2c385d] text-white text-xs rounded-lg px-2 py-1.5">
+                <select aria-label="Drill down" data-testid="report-drill" value={drillName} onChange={(e) => { if (e.target.value) announcePanel("drill"); setDrillName(e.target.value); }} className="bg-[#1b2a55] border border-[#2c385d] text-white text-xs rounded-lg px-2 py-1.5">
                   <option value="">Drill down...</option>{hiers.map((h) => <option key={h.name} value={h.name}>{h.name}</option>)}
                 </select>
               )}
@@ -1419,11 +1471,13 @@
                 const single = t.rows.length === 1 ? Object.keys(t.rows[0]).filter((c) => numOf(t.rows[0][c]) !== null).slice(0, 4) : [];
                 return (
                   <div key={i} data-testid="report-tile" className="bg-white/5 border border-[#2c385d] rounded-2xl p-4 space-y-2 min-w-0 break-inside-avoid mb-4 inline-block w-full">
-                    <div className="text-sm font-bold text-white">{t.title}</div>
+                    <div className="flex items-center gap-2"><div className="text-sm font-bold text-white flex-1 min-w-0 truncate">{t.title}</div><Chevron open={!shut[i]} label={t.title} testid="tile-collapse" onClick={() => setShut((s) => ({ ...s, [i]: !s[i] }))} /></div>
+                    <div className={shut[i] ? "hidden" : "space-y-2"} data-testid={shut[i] ? "tile-body-shut" : "tile-body"}>
                     {single.length > 0 && <div className="flex flex-wrap gap-3">{single.map((c) => <div key={c} className="bg-[#8ef4b2]/10 border border-[#8ef4b2]/30 rounded-xl px-4 py-2"><div className="text-2xl font-extrabold" style={{ color: AC }}>{fmtNum(numOf(t.rows[0][c]))}</div><div className="text-[11px] text-[#78869b]">{c}</div></div>)}</div>}
                     {t.chart !== false && <AutoChart rows={t.rows} title={t.title} />}
                     {!(single.length > 0 && single.length === Object.keys(t.rows[0]).length) && <DataTable rows={t.rows.slice(0, 8)} pretty />}
                     {!viewerOnly && !verDoc && <button data-testid="tile-remove-report" onClick={() => update({ remove_tile: i })} className="text-[10px] text-[#78869b] hover:text-white underline">Remove tile</button>}
+                    </div>
                   </div>
                 );
               })}
@@ -1485,6 +1539,36 @@
       }
 
       function DashboardHub({ tiles, onAddTiles, onRemove, onRefresh, onAsk, client, onPublished, api, openId, onOpenHandled, canManage, viewerOnly, setTiles, role, activeView, defaultView }) {
+        // v58: Undo / Redo while building the dashboard, and collapsible tiles
+        const [dUndo, setDUndo] = useState([]);
+        const [dRedo, setDRedo] = useState([]);
+        const [dShut, setDShut] = useState({});
+        const dPrev = useRef(null);
+        const dSkip = useRef("");
+        useEffect(() => {
+          const p = dPrev.current;
+          if (p) {
+            const a = JSON.stringify(p), b = JSON.stringify(tiles);
+            if (a !== b) {
+              if (dSkip.current === b) dSkip.current = "";
+              else { setDUndo((u) => [...u.slice(-19), p]); setDRedo([]); }
+            }
+          }
+          dPrev.current = tiles;
+        }, [tiles]);
+        const dashUndo = () => { if (!dUndo.length || !setTiles) return; const s = dUndo[dUndo.length - 1]; dSkip.current = JSON.stringify(s); setDRedo((x) => [...x.slice(-19), tiles]); setDUndo((x) => x.slice(0, -1)); setTiles(s); };
+        const dashRedo = () => { if (!dRedo.length || !setTiles) return; const s = dRedo[dRedo.length - 1]; dSkip.current = JSON.stringify(s); setDUndo((x) => [...x.slice(-19), tiles]); setDRedo((x) => x.slice(0, -1)); setTiles(s); };
+        const dUndoRef = useRef(null); dUndoRef.current = { dashUndo, dashRedo, can: !viewerOnly };
+        useEffect(() => {
+          const key = (e) => {
+            const t = e.target; if (t && (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable)) return;
+            if (!(e.ctrlKey || e.metaKey) || !dUndoRef.current.can || document.querySelector("[data-testid=report-view]")) return;
+            const k = String(e.key || "").toLowerCase();
+            if (k === "z" && !e.shiftKey) { e.preventDefault(); dUndoRef.current.dashUndo(); }
+            else if ((k === "z" && e.shiftKey) || k === "y") { e.preventDefault(); dUndoRef.current.dashRedo(); }
+          };
+          window.addEventListener("keydown", key); return () => window.removeEventListener("keydown", key);
+        }, []);
         const [confirmDel, setConfirmDel] = useState("");
         const [dups, setDups] = useState(null);
         const [pubTitle, setPubTitle] = useState("");
@@ -1646,11 +1730,20 @@
               ))}
             </div>
             {tiles.length === 0 && !viewerOnly && <div className="bg-white/5 border border-[#2c385d] rounded-2xl p-6 text-sm text-[#b8c2d6]">Nothing pinned yet. Open <b>Chat with SAMM</b> and say what you want, for example: build me a dashboard of total rent by site.</div>}
+            {tiles.length > 0 && !viewerOnly && (
+              <div className="flex flex-wrap items-center gap-2" data-testid="dash-toolbar">
+                <button data-testid="dash-undo" disabled={dUndo.length === 0} title="Undo the last change to the dashboard you are building (Ctrl+Z)" onClick={dashUndo} className="border border-[#2c385d] hover:border-[#8ef4b2] text-white text-xs px-3 py-1.5 rounded-lg disabled:opacity-50">{"\u21B6"} Undo</button>
+                <button data-testid="dash-redo" disabled={dRedo.length === 0} title="Put back what you just undid (Ctrl+Shift+Z)" onClick={dashRedo} className="border border-[#2c385d] hover:border-[#8ef4b2] text-white text-xs px-3 py-1.5 rounded-lg disabled:opacity-50">Redo {"\u21B7"}</button>
+                {tiles.length > 1 && <button data-testid="dash-collapse-all" onClick={() => { const all = tiles.every((t) => dShut[t.id]); const n = {}; tiles.forEach((t) => { n[t.id] = !all; }); setDShut(n); }} className="border border-[#2c385d] hover:border-[#8ef4b2] text-white text-xs px-3 py-1.5 rounded-lg">{tiles.every((t) => dShut[t.id]) ? "Expand all" : "Collapse all"}</button>}
+              </div>
+            )}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               {tiles.map((t) => (
                 <div key={t.id} data-testid="tile" className="bg-white/5 border border-[#2c385d] rounded-2xl p-4">
-                  {!chartModel(t.rows) && <div className="text-sm font-bold text-white mb-2">{t.title}</div>}
+                  <div className="flex items-center gap-2 mb-2"><div className="text-sm font-bold text-white flex-1 min-w-0 truncate">{t.title}</div><Chevron open={!dShut[t.id]} label={t.title} testid="dash-tile-collapse" onClick={() => setDShut((s) => ({ ...s, [t.id]: !s[t.id] }))} /></div>
+                  <div className={dShut[t.id] ? "hidden" : ""} data-testid={dShut[t.id] ? "dash-tile-shut" : "dash-tile-body"}>
                   <TileBody rows={t.rows} title={t.title} />
+                  </div>
                   <div className="flex items-center justify-between mt-2 text-[10px] font-mono text-[#707070]">
                     <span>updated {t.at}</span>
                     <span className="flex gap-3">
@@ -2569,6 +2662,7 @@
         const [busy, setBusy] = useState(false);
         const load = async () => { try { setD(await api({ action: "report_access_get" })); setErr(""); } catch (e) { setErr(e.message || "Could not load."); } };
         useEffect(() => { if (open && !d) load(); }, [open]);
+        useEffect(() => { const on = (e) => { if (e.detail !== "share") setOpen(false); }; window.addEventListener("samm-panel", on); return () => window.removeEventListener("samm-panel", on); }, []);
         const setFor = async (who, list) => {
           setBusy(true); setErr(""); setMsg("");
           try { const r = await api({ action: "report_access_set", email: who, reports: list }); setMsg(r && r.mail && r.mail.sent ? "Saved. " + who + " has been told by e-mail." : "Saved."); await load(); }
@@ -2578,7 +2672,7 @@
         const people = d ? d.viewers : [];
         return (
           <div data-testid="report-share" className="space-y-2">
-            <div className="flex flex-wrap gap-2"><button data-testid="share-toggle" onClick={() => setOpen(!open)} className={bt}>{open ? "Hide sharing" : "Share with report viewers"}</button>{extra}</div>
+            <div className="flex flex-wrap gap-2"><button data-testid="share-toggle" onClick={() => { if (!open) announcePanel("share"); setOpen(!open); }} className={bt}>{open ? "Hide sharing" : "Share with report viewers"}</button>{extra}</div>
             {open && (
               <div className="bg-white/5 border border-[#2c385d] rounded-xl p-3 space-y-2 text-xs text-[#b8c2d6]">
                 <div>Report viewers see only the reports you tick. Each change is e-mailed to them.</div>
@@ -3188,8 +3282,8 @@
                         <span className="font-mono text-amber-400" title={d.dataset}>{d.title || friendlyDs(d.dataset)}</span>
                         <span className="text-[#808080]">{kindLine(d)} · updated {String(d.updated || "").slice(0, 10)}</span>
                         <span className={d.view ? "text-green-300" : "text-amber-300"}>{d.view ? "Gold view ready" : "No Gold view yet"}</span>
-                        <button data-testid="silver-view" onClick={() => setOpenData(openData === d.dataset ? null : d.dataset)} className="underline text-amber-400 hover:text-amber-300">{openData === d.dataset ? "Hide data" : "View data"}</button>
-                        <button data-testid="silver-map" onClick={() => setOpenMap(openMap === d.dataset ? null : d.dataset)} className="underline text-amber-400 hover:text-amber-300">{openMap === d.dataset ? "Close" : "Check how columns are matched"}</button>
+                        <button data-testid="silver-view" onClick={() => { setOpenMap(null); setOpenData(openData === d.dataset ? null : d.dataset); }} className="underline text-amber-400 hover:text-amber-300">{openData === d.dataset ? "Hide data" : "View data"}</button>
+                        <button data-testid="silver-map" onClick={() => { setOpenData(null); setOpenMap(openMap === d.dataset ? null : d.dataset); }} className="underline text-amber-400 hover:text-amber-300">{openMap === d.dataset ? "Close" : "Check how columns are matched"}</button>
                         {!d.view && <button data-testid="silver-build" disabled={busy === d.dataset} onClick={() => buildGold(d)} className="underline text-amber-400 hover:text-amber-300 disabled:opacity-50">{busy === d.dataset ? "Building..." : "Build Gold view"}</button>}
                       </div>
                       {d.made_of && d.made_of.files.length > 0 && (d.kind === "combined" || d.kind === "list") && <div data-testid="silver-made-of" className="text-[11px] text-[#808080]">{d.kind === "list" ? "Built from: " : "Files in it: "}{d.made_of.files.map((x) => x.title).join(", ")}</div>}
@@ -4258,6 +4352,10 @@
         const itemsRef = useRef([]);
         itemsRef.current = items;
         const prevCount = useRef(0);
+        const [shutItems, setShutItems] = useState({});   // v58: upload cards can be collapsed; a new one opens and the earlier ones close
+        useEffect(() => {
+          if (items.length > prevCount.current && items.length > 1) setShutItems((s) => { const n = { ...s }; items.forEach((i, k) => { n[i.id] = k !== 0; }); return n; });
+        }, [items.length]);
         useEffect(() => {   // a newly dropped file appears right under the toolbar: bring it into view
           if (items.length > prevCount.current) { const el = document.querySelector("[data-testid=onb-toolbar]"); if (el && el.scrollIntoView) el.scrollIntoView({ block: "start", behavior: "smooth" }); }
           prevCount.current = items.length;
@@ -4603,6 +4701,7 @@
                 </div>
               );
             })}
+            {items.length > 1 && <div className="flex justify-end"><button data-testid="items-collapse-all" onClick={() => { const all = items.every((i) => shutItems[i.id]); const n = {}; items.forEach((i) => { n[i.id] = !all; }); setShutItems(n); }} className="border border-[#3D3D3D] hover:border-amber-500 text-white text-xs px-3 py-1.5 rounded-lg">{items.every((i) => shutItems[i.id]) ? "Expand all" : "Collapse all"}</button></div>}
             {items.map((it) => {
               const idx = STAGES.findIndex((s) => s[0] === it.stage);
               const iapi = apiFor(it.client);
@@ -4613,10 +4712,13 @@
                       {it.dsName && <div data-testid="item-dsname" className="text-[11px] text-[#A0A0A0] truncate">Dataset: <b className="text-white">{String(it.dsName).replace(/^silver_/, "")}</b>{it.willUpdate ? (it.aliasUsed ? " · updates the renamed dataset" : " · updates the existing dataset") : " · new dataset"}</div>}</div>
                     <div className="flex items-center gap-3 shrink-0">
                       {it.client && <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-[#333] text-[#BBB]" data-testid="item-client">client: {it.client}</span>}
+                      {shutItems[it.id] && <span data-testid="item-summary" className="text-[10px] font-mono px-2 py-0.5 rounded bg-[#333] text-[#BBB]">{it.error ? "Needs attention" : it.done ? "Done" : "Working..."}</span>}
                       {it.size > 0 && <div className="text-[11px] text-[#808080]">{(it.size / 1024).toFixed(0)} KB</div>}
+                      <Chevron open={!shutItems[it.id]} label={it.name} testid="item-collapse" onClick={() => setShutItems((s) => ({ ...s, [it.id]: !s[it.id] }))} />
                       <button onClick={() => dismiss(it.id)} data-testid="item-dismiss" aria-label={"Dismiss " + it.name} title="Remove from this list (a running job carries on and stays in History)" className="text-[11px] text-[#A0A0A0] hover:text-white underline">Dismiss</button>
                     </div>
                   </div>
+                  <div className={shutItems[it.id] ? "hidden" : "space-y-3"} data-testid={shutItems[it.id] ? "item-body-shut" : "item-body"}>
                   {it.job && <JobCard job={it.job} api={iapi} onUpdate={(j) => upd(it.id, { job: j })} onAsk={onAsk} onViewsChanged={viewsChanged} onDismiss={() => dismiss(it.id)} />}
                   {!it.job && !it.error && !it.done && (
                     <div data-testid="upload-progress" className="space-y-1">
@@ -4638,6 +4740,7 @@
                     <MappingEditor key={ds} dataset={ds} api={iapi} onAsk={onAsk}
                       onBuilt={() => { upd(it.id, { stage: "gold", done: true, msg: "Gold view ready." }); viewsChanged(); setViewsTick((n) => n + 1); }} />
                   ) : null)}
+                  </div>
                 </div>
               );
             })}
@@ -5437,7 +5540,7 @@
                   <div className="text-xs font-mono space-y-1">
                     <div data-testid="who-role" className="text-white">{ROLE_LABELS[identity.role] || identity.role}</div>
                     <div className="side-muted truncate" title={identity.email}>{identity.email}</div>
-                    <div data-testid="who-version" className="side-muted opacity-80">Server {identity.version || "older than v35 - redeploy the backend"} · Screen v57</div>
+                    <div data-testid="who-version" className="side-muted opacity-80">Server {identity.version || "older than v35 - redeploy the backend"} · Screen v58</div>
                     <div className="flex gap-3 mt-2">
                       {identity.can_change_password !== false && <button data-testid="change-password-open" onClick={() => setShowPw(true)} className="side-muted hover-w underline">Change password</button>}
                       <button onClick={onSignOut} className="side-muted hover-w underline">Sign out</button>
