@@ -709,6 +709,10 @@
       // assistPlan(text, ctx) -> { text, card } or null. A card is a plain object the screen shows for review; nothing changes until Keep.
       // assistAct(card, action, arg, ctx) -> { card, text? } handles every button on a card.
       const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+      // v53: Power BI now gets a finished report (charts on pages), not only the data tables
+      const pbiLine = (r) => r.report_link
+        ? "Power BI report " + (r.report_status === "updated" ? "updated" : "created") + ": \"" + r.dataset + "\" with " + r.visuals + " visual" + (r.visuals === 1 ? "" : "s") + " on " + r.pages + " page" + (r.pages === 1 ? "" : "s") + (r.report_themed === false ? " (standard look)" : "") + ". The link opens the finished report."
+        : "Sent the data to Power BI (dataset \"" + r.dataset + "\", " + r.rows + " row(s) in " + (r.tables || []).length + " table(s)), but the report itself could not be made" + (r.report_error ? ": " + r.report_error : ".") + " You can still create one from the dataset in Power BI.";
       let cardSeq = 0;
       const newCard = (kind, extra) => ({ id: "c" + ++cardSeq, kind, status: "open", ...extra });
       function parseBuildCommand(text) {
@@ -1083,8 +1087,8 @@
             if (card.pbi) {
               try {
                 const p = await ctx.api({ action: "powerbi_publish", title: rep.title || title, tiles: push });
-                lines.push("Sent to Power BI: dataset \"" + p.dataset + "\" with " + p.rows + " row(s) in " + p.tables.length + " table(s).");
-                links.push({ label: "Open in Power BI", href: p.link });
+                lines.push(pbiLine(p));
+                links.push({ label: p.report_link ? "Open the Power BI report" : "Open in Power BI", href: p.link });
               } catch (e) { lines.push("Saved here, but Power BI did not take it: " + ((e && e.message) || "it failed") + " Say \"send it to Power BI\" to try again."); }
             }
             if (card.sis) {
@@ -1168,10 +1172,10 @@
           const links = []; const lines = [];
           if (card.tool === "powerbi") {
             const r = await ctx.api({ action: "powerbi_publish", title: card.title, tiles: (ctx.tiles || []).filter((t) => t.rows && t.rows.length).map((t) => ({ title: t.title, rows: t.rows, at: t.at })) });
-            lines.push("Sent to Power BI: dataset \"" + r.dataset + "\" with " + r.rows + " row(s) in " + r.tables.length + " table(s).");
-            links.push({ label: "Open in Power BI", href: r.link });
+            lines.push(pbiLine(r));
+            links.push({ label: r.report_link ? "Open the Power BI report" : "Open in Power BI", href: r.link });
             if (card.emails.length) {
-              const s = await ctx.api({ action: "powerbi_share", title: card.title, dataset_id: r.dataset_id, tables: r.tables.length, rows: r.rows, to: card.emails.join(", ") });
+              const s = await ctx.api({ action: "powerbi_share", title: card.title, dataset_id: r.dataset_id, report_id: r.report_id, tables: r.tables.length, rows: r.rows, to: card.emails.join(", ") });
               lines.push("E-mailed " + s.sent + " of " + s.results.length + ": " + s.results.map((x) => x.email + (x.sent ? " sent" : " not sent (" + x.error + ")")).join("; ") + ".");
             }
           } else {
@@ -1249,7 +1253,7 @@
                       : t.newRows && !t.sameCols ? <span className="text-amber-200">The columns are different from before, so it is set to Keep. Choose Update if the new version is right.</span>
                       : t.same ? "Same numbers as before." + (t.via ? " (from " + t.via + ")" : "") : (t.via ? "From " + t.via + ". " : "") + "Now " + (t.newRows || []).length + " row" + ((t.newRows || []).length === 1 ? "" : "s") + (t.oldRows ? " (was " + t.oldRows.length + ")" : "") + "."}
                   </div>
-                  {t.newRows && t.mode !== "drop" && !t.same && <div className="mt-2" data-testid="card-tile-preview"><DataTable rows={(t.mode === "keep" && t.oldRows ? t.oldRows : t.newRows).slice(0, 3)} /></div>}
+                  {t.newRows && t.mode !== "drop" && !t.same && <div className="mt-2" data-testid="card-tile-preview"><DataTable rows={(t.mode === "keep" && t.oldRows ? t.oldRows : t.newRows).slice(0, 3)} pretty /></div>}
                 </div>
               ))}
               {!done && (
@@ -1361,7 +1365,6 @@
             </div>}
             <div className="flex flex-wrap gap-2">
               <button onClick={onBack} className={bt} data-testid="report-back">← All reports</button>
-              {canRepublish && !verDoc && <button data-testid="report-republish-open" onClick={() => window.dispatchEvent(new CustomEvent("samm-republish", { detail: { id: cur.id } }))} className={bt}>Republish</button>}
               {canRepublish && !verDoc && <button data-testid="report-versions" onClick={() => (vers === null ? loadVers() : setVers(null))} className={bt}>{vers === null ? "Older versions" : "Hide older versions"}</button>}
               {cur.kind === "dataset" && !viewerOnly && <button onClick={refresh} disabled={busy} className={bt} data-testid="report-refresh">{busy ? "Refreshing..." : "Refresh numbers"}</button>}
               <button onClick={() => { try { navigator.clipboard.writeText(link); setMsg("Link copied."); } catch (_) { setMsg(link); } }} className={bt} data-testid="report-copy">Copy link</button>
@@ -1376,7 +1379,13 @@
               )}
               {cur.dataset && !viewerOnly && <button data-testid="report-ask" onClick={() => openSplit({ dataset: cur.dataset, reportId: cur.id })} className={bt}>Ask SAMM</button>}
             </div>
-            {canManage && !viewerOnly && <ReportShare api={api} reportId={cur.id} />}
+            {(() => {
+              const rpBtns = canRepublish && !verDoc ? <>
+                <button data-testid="report-republish-share" onClick={() => window.dispatchEvent(new CustomEvent("samm-republish", { detail: { id: cur.id } }))} className={bt}>Republish</button>
+                <button data-testid="report-republish-pbi" onClick={() => window.dispatchEvent(new CustomEvent("samm-republish", { detail: { id: cur.id, pbi: true } }))} className={bt}>Republish to Power BI</button></> : null;
+              if (canManage && !viewerOnly) return <ReportShare api={api} reportId={cur.id} extra={rpBtns} />;
+              return rpBtns ? <div className="flex flex-wrap gap-2">{rpBtns}</div> : null;
+            })()}
             {msg && <div data-testid="report-msg" className="text-[11px] text-[#8ef4b2]">{msg}</div>}
             {vers !== null && !verDoc && (
               <div data-testid="versions-panel" className="rounded-xl border border-[#2c385d] bg-white/5 p-3 space-y-1 text-xs">
@@ -1398,15 +1407,15 @@
               </div>
             )}
             {drillName && <DrillView api={api} name={drillName} reportId={cur.id} onClose={() => setDrillName("")} />}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div className="columns-1 lg:columns-2 gap-4" data-testid="report-tiles">
               {(shown.tiles || []).map((t, i) => {
                 const single = t.rows.length === 1 ? Object.keys(t.rows[0]).filter((c) => numOf(t.rows[0][c]) !== null).slice(0, 4) : [];
                 return (
-                  <div key={i} data-testid="report-tile" className="bg-white/5 border border-[#2c385d] rounded-2xl p-4 space-y-2 min-w-0">
+                  <div key={i} data-testid="report-tile" className="bg-white/5 border border-[#2c385d] rounded-2xl p-4 space-y-2 min-w-0 break-inside-avoid mb-4 inline-block w-full">
                     <div className="text-sm font-bold text-white">{t.title}</div>
                     {single.length > 0 && <div className="flex flex-wrap gap-3">{single.map((c) => <div key={c} className="bg-[#8ef4b2]/10 border border-[#8ef4b2]/30 rounded-xl px-4 py-2"><div className="text-2xl font-extrabold" style={{ color: AC }}>{fmtNum(numOf(t.rows[0][c]))}</div><div className="text-[11px] text-[#78869b]">{c}</div></div>)}</div>}
                     {t.chart !== false && <AutoChart rows={t.rows} title={t.title} />}
-                    <DataTable rows={t.rows.slice(0, 8)} />
+                    {!(single.length > 0 && single.length === Object.keys(t.rows[0]).length) && <DataTable rows={t.rows.slice(0, 8)} pretty />}
                     {!viewerOnly && !verDoc && <button data-testid="tile-remove-report" onClick={() => update({ remove_tile: i })} className="text-[10px] text-[#78869b] hover:text-white underline">Remove tile</button>}
                   </div>
                 );
@@ -1490,7 +1499,7 @@
           try {
             const r = pbiOut.tool === "sisense"
               ? await api({ action: "sisense_share", title: pbiOut.title, to: shareTo, note: shareNote })
-              : await api({ action: "powerbi_share", title: pbiOut.title, dataset_id: pbiOut.dataset_id, tables: pbiOut.tables, rows: pbiOut.rows, to: shareTo, note: shareNote, link: shareLink.trim(), grant: shareGrant });
+              : await api({ action: "powerbi_share", title: pbiOut.title, dataset_id: pbiOut.dataset_id, report_id: pbiOut.report_id, tables: pbiOut.tables, rows: pbiOut.rows, to: shareTo, note: shareNote, link: shareLink.trim(), grant: shareGrant });
             setShareRes(r);
           } catch (e) { setShareErr((e && e.message) || "Could not send."); } finally { setShareBusy(false); }
         };
@@ -1530,9 +1539,9 @@
             setPubMsg("Sending to Power BI...");
             try {
               const r = await api({ action: "powerbi_publish", title, tiles: tiles.filter((t) => t.rows && t.rows.length).map((t) => ({ title: t.title, rows: t.rows, at: t.at })) });
-              setPubMsg("Sent to Power BI: dataset \"" + r.dataset + "\" with " + r.rows + " row(s) in " + r.tables.length + " table(s)" + (r.refreshed ? " (refreshed)" : "") + ". In Power BI open the workspace, choose that dataset and click Create report.");
+              setPubMsg(pbiLine(r) + (r.report_link ? "" : " In Power BI open the workspace, choose that dataset and click Create report."));
               setPbiLink(r.link);
-              setPbiOut({ tool: "powerbi", title, dataset_id: r.dataset_id, tables: r.tables.length, rows: r.rows }); setShareRes(null); setShareErr("");
+              setPbiOut({ tool: "powerbi", title, dataset_id: r.dataset_id, report_id: r.report_id, tables: r.tables.length, rows: r.rows }); setShareRes(null); setShareErr("");
             } catch (e) { setPubMsg("Could not send to Power BI: " + (e && e.message ? e.message : e)); setPbiLink(""); setPbiOut(null); }
             return;
           }
@@ -2471,14 +2480,29 @@
       function reportLink(id, client) {
         return window.location.origin + window.location.pathname + "#report=" + id + (client ? "&client=" + encodeURIComponent(client) : "");
       }
-      function DataTable({ columns, rows }) {
+      // v53: report tables show 1337718433 / 1,337,718,433 instead of 1.33771843332E9. Identifier-like columns and years are left as they are.
+      const ID_COL = /(^|_|\b)(id|code|ref|key|no|num|number|seq|sequence|phone|postcode|zip|year|fy|uprn|account|sort)(_|\b|$)/i;
+      function prettyCell(col, v) {
+        const s = v === null || v === undefined ? "" : String(v);
+        const t = s.trim();
+        if (!/^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(t) || /^-?0\d/.test(t)) return s;
+        const n = Number(t); if (!isFinite(n)) return s;
+        const sci = /[eE]/.test(t);
+        if (!sci && ID_COL.test(String(col))) return s;
+        const a = Math.abs(n), dec = (t.split(".")[1] || "");
+        if (!sci && Number.isInteger(n) && (a < 1000 || (a >= 1900 && a <= 2100))) return s;
+        if (!sci && a < 1000 && dec.length <= 2) return s;
+        return n.toLocaleString("en-GB", { maximumFractionDigits: a >= 1e6 ? 0 : 2 });
+      }
+      function DataTable({ columns, rows, pretty }) {
         const cols = columns && columns.length ? columns : Object.keys((rows || [])[0] || {});
+        const show = (c, v) => (pretty ? prettyCell(c, v) : String(v ?? ""));
         if (!rows || !rows.length) return <div className="text-xs text-[#808080]">No rows to show.</div>;
         return (
           <div className="overflow-auto max-h-80 border border-[#2D2D2D] rounded-lg">
             <table className="w-full text-[11px] font-mono">
               <thead><tr>{cols.map((c) => <th key={c} className="text-left text-amber-400 px-2 py-1 sticky top-0 bg-[#1D1D1D] whitespace-nowrap">{c}</th>)}</tr></thead>
-              <tbody>{rows.map((r, i) => <tr key={i} className="border-t border-[#2D2D2D]">{cols.map((c) => <td key={c} className="px-2 py-1 text-[#D0D0D0] whitespace-nowrap max-w-[220px] truncate" title={String(r[c] ?? "")}>{String(r[c] ?? "")}</td>)}</tr>)}</tbody>
+              <tbody>{rows.map((r, i) => <tr key={i} className="border-t border-[#2D2D2D]">{cols.map((c) => <td key={c} className="px-2 py-1 text-[#D0D0D0] whitespace-nowrap max-w-[220px] truncate" title={String(r[c] ?? "")}>{show(c, r[c])}</td>)}</tr>)}</tbody>
             </table>
           </div>
         );
@@ -2529,7 +2553,7 @@
           </div>
         );
       }
-      function ReportShare({ api, reportId }) {
+      function ReportShare({ api, reportId, extra }) {
         const [open, setOpen] = useState(false);
         const [d, setD] = useState(null);
         const [err, setErr] = useState("");
@@ -2547,7 +2571,7 @@
         const people = d ? d.viewers : [];
         return (
           <div data-testid="report-share" className="space-y-2">
-            <button data-testid="share-toggle" onClick={() => setOpen(!open)} className={bt}>{open ? "Hide sharing" : "Share with report viewers"}</button>
+            <div className="flex flex-wrap gap-2"><button data-testid="share-toggle" onClick={() => setOpen(!open)} className={bt}>{open ? "Hide sharing" : "Share with report viewers"}</button>{extra}</div>
             {open && (
               <div className="bg-white/5 border border-[#2c385d] rounded-xl p-3 space-y-2 text-xs text-[#b8c2d6]">
                 <div>Report viewers see only the reports you tick. Each change is e-mailed to them.</div>
@@ -5216,17 +5240,17 @@
           addMessage({ role: "assistant", text: (planned.text || "") + (planned.card ? "\n\nIt is in the middle of the page for you to review. Press Keep there, or Discard." : ""), chips: planned.chips || [] });
         };
         // v52: the Republish buttons (report list and open report) ask for the same review card the chat makes
-        const startRepublish = async (id) => {
+        const startRepublish = async (id, want) => {
           if (!id || reviewBusy) return;
           setChatOpen(true); setReviewBusy(true);
           try {
-            const card = await republishCard(id, assistCtx(), {});
+            const card = await republishCard(id, assistCtx(), want || {});
             setReviewCard(card);
             addMessage({ role: "assistant", text: "I asked every tile of **" + card.origTitle + "** again on today's data. **Nothing has been saved yet.** The review is in the middle of the page: choose what to do with each tile, then press **Keep**." });
           } catch (e) { addMessage({ role: "assistant", error: { message: (e && e.message) || "Could not prepare the republish.", details: [], status: (e && e.status) || 0 } }); } finally { setReviewBusy(false); }
         };
         const republishRef = useRef(null); republishRef.current = startRepublish;
-        useEffect(() => { const on = (e) => { if (e.detail && e.detail.id && republishRef.current) republishRef.current(e.detail.id); }; window.addEventListener("samm-republish", on); return () => window.removeEventListener("samm-republish", on); }, []);
+        useEffect(() => { const on = (e) => { if (e.detail && e.detail.id && republishRef.current) republishRef.current(e.detail.id, { pbi: !!e.detail.pbi }); }; window.addEventListener("samm-republish", on); return () => window.removeEventListener("samm-republish", on); }, []);
         const rememberSaying = async (id) => {
           const m = messages.find((x) => x.id === id); if (!m || !m.remember) return;
           try { await api2({ action: "teach_save", kind: "saying", phrase: m.remember.said, value: m.remember.meant }); setMessages((prev) => prev.map((x) => x.id === id ? { ...x, remember: { ...x.remember, saved: true } } : x)); }
@@ -5400,7 +5424,7 @@
                   <div className="text-xs font-mono space-y-1">
                     <div data-testid="who-role" className="text-white">{ROLE_LABELS[identity.role] || identity.role}</div>
                     <div className="side-muted truncate" title={identity.email}>{identity.email}</div>
-                    <div data-testid="who-version" className="side-muted opacity-80">Server {identity.version || "older than v35 - redeploy the backend"} · Screen v52</div>
+                    <div data-testid="who-version" className="side-muted opacity-80">Server {identity.version || "older than v35 - redeploy the backend"} · Screen v53</div>
                     <div className="flex gap-3 mt-2">
                       {identity.can_change_password !== false && <button data-testid="change-password-open" onClick={() => setShowPw(true)} className="side-muted hover-w underline">Change password</button>}
                       <button onClick={onSignOut} className="side-muted hover-w underline">Sign out</button>
