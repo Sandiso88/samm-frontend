@@ -3994,9 +3994,10 @@
       }
 
       // v35: direct database connections (additive: files and folders work exactly as before)
-      function DbPanel({ client, clientName, apiFor, onJobs }) {
+      const NEW_CLIENT = "__new_client__";
+      function DbPanel({ client, clientName, apiFor, onJobs, clients, clientNames, canAddClient, onClientsChanged }) {
         const api = useMemo(() => apiFor(client), [client]);
-        const blank = { id: "", name: "", type: "sqlserver", host: "", port: "", database: "", user: "", password: "", encrypt: true, verify_cert: true };
+        const blank = { id: "", client: "", newClient: "", name: "", type: "sqlserver", host: "", port: "", database: "", user: "", password: "", encrypt: true, verify_cert: true };
         const [types, setTypes] = useState([]);
         const [list, setList] = useState(null);
         const [form, setForm] = useState(null);
@@ -4028,12 +4029,22 @@
         const save = async () => {
           setBusy("save"); setErr(null); setMsg("");
           try {
-            const body = { action: "db_save", ...form, port: form.port ? Number(form.port) : undefined };
+            // v60: every data source is saved under a named client. A new client can be added here; an existing one is simply picked.
+            let owner = form.client, ownerName = (clientNames || {})[owner] || owner;
+            if (owner === NEW_CLIENT) {
+              const made = await apiFor(undefined)({ action: "client_add", name: form.newClient });
+              owner = made.id; ownerName = made.name || made.id;
+              if (onClientsChanged) onClientsChanged();
+            }
+            const mine = apiFor(owner);
+            const body = { action: "db_save", ...form, client: owner, port: form.port ? Number(form.port) : undefined };
+            delete body.newClient;
             if (!form.password) delete body.password;
-            const r = await api(body);
+            const r = await mine(body);
             const id = r.connection.id;
-            try { const t = await api({ action: "db_test", id }); setMsg("Saved. Connected: " + t.tables + " table(s) and " + t.views + " view(s) found."); }
-            catch (e) { setErr(e); setMsg("Saved, but the test connection failed (see below). Check the details and press Save again."); }
+            const where = owner === client ? "" : " Saved under " + ownerName + ": choose " + ownerName + " in the Client box to see it and extract its tables.";
+            try { const t = await mine({ action: "db_test", id }); setMsg("Saved for " + ownerName + ". Connected: " + t.tables + " table(s) and " + t.views + " view(s) found." + where); }
+            catch (e) { setErr(e); setMsg("Saved for " + ownerName + ", but the test connection failed (see below). Check the details and press Save again." + where); }
             setForm(null); await load();
           } catch (e) { setErr(e); } finally { setBusy(""); }
         };
@@ -4089,7 +4100,7 @@
         const stLabel = { queued: "Waiting", running: "Reading rows...", done: "Loaded", partial: "Loaded (stopped at the row limit)", unchanged: "Same as last time", no_changes: "No changes", empty: "Empty table", error: "Failed" };
         return (
           <div data-testid="db-panel" className="border border-[#3D3D3D] rounded-xl p-4 space-y-3 bg-[#1E1E1E] text-xs">
-            <div className="text-sm font-semibold text-white">Connect to a database for {clientName || client || "this client"}</div>
+            <div className="text-sm font-semibold text-white">Connect to a database{(() => { const k = form && form.client && form.client !== NEW_CLIENT ? form.client : (form && form.client === NEW_CLIENT ? "" : client); const n = form && form.client === NEW_CLIENT ? form.newClient.trim() : ((clientNames || {})[k] || k || clientName); return n ? " for " + n : ""; })()}</div>
             <div className="text-[#A0A0A0]">SAMM reads the tables straight from the database and brings them through Bronze, Silver and Gold like any other data. The password is kept in a secure vault, never in this screen or in SAMM's files. SAMM only reads; it never writes to your database.</div>
             <ErrBox err={err} />
             {msg && <div data-testid="db-msg" className="text-green-300">{msg}</div>}
@@ -4102,19 +4113,30 @@
                 <span className="text-[#808080]">{c.schedule && c.schedule.every !== "off" ? "refreshes " + c.schedule.every : "on demand"}{c.last_run ? " · last run " + String(c.last_run).replace("T", " ").slice(0, 16) + " UTC" : ""}</span>
                 <span className="flex-1" />
                 <button data-testid="db-open" onClick={() => openTables(c)} disabled={!!busy} className="bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-bold px-3 py-1 rounded">Choose tables / Extract</button>
-                <button data-testid="db-edit" onClick={() => { setForm({ ...blank, ...c, password: "" }); setMsg(""); setErr(null); }} className="underline text-[#A0A0A0] hover:text-white">Edit</button>
+                <button data-testid="db-edit" onClick={() => { setForm({ ...blank, ...c, client: client || "", password: "" }); setMsg(""); setErr(null); }} className="underline text-[#A0A0A0] hover:text-white">Edit</button>
                 <button data-testid="db-delete" onClick={() => remove(c)} className="underline text-[#A0A0A0] hover:text-white">Remove</button>
               </div>
             ))}
-            {!form && <button data-testid="db-add" onClick={() => { setForm({ ...blank, port: "" }); setMsg(""); setErr(null); }} className="border border-[#3D3D3D] hover:border-amber-500 text-white px-3 py-2 rounded-lg">+ Add a database connection</button>}
+            {!form && <button data-testid="db-add" onClick={() => { setForm({ ...blank, port: "", client: client || "" }); setMsg(""); setErr(null); }} className="border border-[#3D3D3D] hover:border-amber-500 text-white px-3 py-2 rounded-lg">+ Add a database connection</button>}
             {form && (
               <div data-testid="db-form" className="space-y-2 border border-[#2D2D2D] rounded-lg p-3">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <label className="flex flex-col gap-1 text-[#C0C0C0] sm:col-span-2">Client name <span className="text-red-400" title="Required">*</span>
+                    <select data-testid="db-client" required aria-required="true" value={form.client} disabled={!!form.id} onChange={(e) => setForm({ ...form, client: e.target.value })} className={field}>
+                      <option value="">Choose the client this data belongs to…</option>
+                      {(clients && clients.length ? clients : (client ? [client] : [])).map((c) => <option key={c} value={c}>{(clientNames || {})[c] || c}</option>)}
+                      {canAddClient && !form.id && <option value={NEW_CLIENT}>+ Add a new client…</option>}
+                    </select>
+                    {form.id && <span className="text-[11px] text-[#808080]">A saved connection stays with its client.</span>}</label>
+                  {form.client === NEW_CLIENT && (
+                    <label className="flex flex-col gap-1 text-[#C0C0C0] sm:col-span-2">New client's name <span className="text-red-400">*</span>
+                      <input data-testid="db-new-client" value={form.newClient} onChange={(e) => setForm({ ...form, newClient: e.target.value })} placeholder="e.g. Landsec" className={field} /></label>
+                  )}
                   <label className="flex flex-col gap-1 text-[#C0C0C0]">Type
                     <select data-testid="db-type" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value, port: "" })} className={field}>
                       {(types.length ? types : [{ id: "sqlserver", label: "SQL Server", available: true }]).map((t) => <option key={t.id} value={t.id}>{t.label}{t.available === false ? " (driver not installed)" : ""}</option>)}
                     </select></label>
-                  <label className="flex flex-col gap-1 text-[#C0C0C0]">Connection name
+                  <label className="flex flex-col gap-1 text-[#C0C0C0]">Connection name <span className="text-red-400" title="Required">*</span>
                     <input data-testid="db-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Finance system" className={field} /></label>
                   <label className="flex flex-col gap-1 text-[#C0C0C0]">Server address
                     <input data-testid="db-host" value={form.host} onChange={(e) => setForm({ ...form, host: e.target.value })} placeholder="e.g. db.example.com" className={field} /></label>
@@ -4132,7 +4154,7 @@
                   <label className="flex items-center gap-2"><input data-testid="db-verify" type="checkbox" checked={form.verify_cert} onChange={(e) => setForm({ ...form, verify_cert: e.target.checked })} /> Check the server's certificate</label>
                 </div>
                 <div className="flex gap-2">
-                  <button data-testid="db-save" onClick={save} disabled={!!busy || !form.name || !form.host || !form.database || !form.user || (!form.id && !form.password)} className="bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-bold text-sm px-4 py-2 rounded-lg">{busy === "save" ? "Connecting..." : "Save and test"}</button>
+                  <button data-testid="db-save" onClick={save} disabled={!!busy || !form.client || (form.client === NEW_CLIENT && form.newClient.trim().length < 2) || !form.name || !form.host || !form.database || !form.user || (!form.id && !form.password)} className="bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-bold text-sm px-4 py-2 rounded-lg">{busy === "save" ? "Connecting..." : "Save and test"}</button>
                   <button onClick={() => { setForm(null); setErr(null); }} className="border border-[#3D3D3D] text-white text-sm px-4 py-2 rounded-lg">Cancel</button>
                 </div>
               </div>
@@ -4331,7 +4353,7 @@
         );
       }
 
-      function OnboardingHub({ session, onAsk, onViewsChanged, clients, clientNames, acting, mode, onMode }) {
+      function OnboardingHub({ session, onAsk, onViewsChanged, clients, clientNames, acting, mode, onMode, canAddClient, onClientsChanged }) {
         const [items, setItems] = useState([]);
         const [over, setOver] = useState(false);
         const [pipe, setPipe] = useState({ busy: false, msg: "", err: null });
@@ -4596,7 +4618,7 @@
                   <button key={id} data-testid={"method-" + id} aria-pressed={method === id} onClick={() => setMethod(id)} className={"px-3 py-1.5 rounded-lg font-semibold border " + (method === id ? "border-amber-500 bg-amber-500/10 text-amber-300" : "border-[#3D3D3D] text-[#C0C0C0] hover:border-amber-500")}>{label}</button>
                 ))}
               </div>
-              {method === "db" && <DbPanel client={nowClient()} clientName={(clientNames || {})[nowClient()]} apiFor={apiFor} onJobs={addDbJobs} />}
+              {method === "db" && <DbPanel client={nowClient()} clientName={(clientNames || {})[nowClient()]} apiFor={apiFor} onJobs={addDbJobs} clients={clients} clientNames={clientNames} canAddClient={canAddClient} onClientsChanged={onClientsChanged} />}
               {method === "files" && (<>
               <label
                 htmlFor="onb-file"
@@ -5207,6 +5229,7 @@
           if (demo) return;
           callBackend(session.url, session.token, { action: "clients" }).then((r) => { setClients((r.clients || []).filter((c) => c !== "UNASSIGNED_NEW_CLIENT")); setClientNames(r.names || {}); setActing((a) => a || r.home || ""); }).catch(() => {});
         }, [activeTab]);
+        const refreshClients = () => { callBackend(session.url, session.token, { action: "clients" }).then((r) => { setClients((r.clients || []).filter((c) => c !== "UNASSIGNED_NEW_CLIENT")); setClientNames(r.names || {}); }).catch(() => {}); };
         const switchClient = (c) => {
           window.__sammClient = c === identity.tenant_id ? null : c;
           setActing(c); setActiveView(""); setTalk(null); loadViews();
@@ -5554,7 +5577,7 @@
                   <div className="text-xs font-mono space-y-1">
                     <div data-testid="who-role" className="text-white">{ROLE_LABELS[identity.role] || identity.role}</div>
                     <div className="side-muted truncate" title={identity.email}>{identity.email}</div>
-                    <div data-testid="who-version" className="side-muted opacity-80">Server {identity.version || "older than v35 - redeploy the backend"} · Screen v59</div>
+                    <div data-testid="who-version" className="side-muted opacity-80">Server {identity.version || "older than v35 - redeploy the backend"} · Screen v60</div>
                     <div className="flex gap-3 mt-2">
                       {identity.can_change_password !== false && <button data-testid="change-password-open" onClick={() => setShowPw(true)} className="side-muted hover-w underline">Change password</button>}
                       <button onClick={onSignOut} className="side-muted hover-w underline">Sign out</button>
@@ -5639,6 +5662,8 @@
                     session={session}
                     clients={clients}
                     clientNames={clientNames}
+                    canAddClient={role === "system_admin"}
+                    onClientsChanged={refreshClients}
                     acting={acting || identity.tenant_id}
                     onViewsChanged={loadViews}
                     onAsk={(v) => {
