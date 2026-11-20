@@ -718,7 +718,7 @@
       const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
       // v53: Power BI now gets a finished report (charts on pages), not only the data tables
       const pbiLine = (r) => r.report_link
-        ? "Power BI report " + (r.report_status === "updated" ? "updated" : "created") + ": \"" + r.dataset + "\" with " + r.visuals + " visual" + (r.visuals === 1 ? "" : "s") + " on " + r.pages + " page" + (r.pages === 1 ? "" : "s") + (r.report_themed === false ? " (standard look)" : "") + ". The link opens the finished report."
+        ? "Power BI report " + (r.report_status === "updated" ? "updated" : "created") + ": \"" + r.dataset + "\" with " + r.visuals + " visual" + (r.visuals === 1 ? "" : "s") + " on " + r.pages + " page" + (r.pages === 1 ? "" : "s") + (r.report_themed === false ? " (standard look)" : "") + ((r.report_header === false || r.report_art === false) && r.report_themed !== false ? " (made without the " + [r.report_art === false ? "logo and background picture" : "", r.report_header === false ? "title box" : ""].filter(Boolean).join(" and ") + ": Power BI would not take " + (r.report_art === false && r.report_header === false ? "them" : "it") + ")" : "") + ". The link opens the finished report."
         : "Sent the data to Power BI (dataset \"" + r.dataset + "\", " + r.rows + " row(s) in " + (r.tables || []).length + " table(s)), but the report itself could not be made" + (r.report_error ? ": " + r.report_error : ".") + " You can still create one from the dataset in Power BI.";
       let cardSeq = 0;
       const newCard = (kind, extra) => ({ id: "c" + ++cardSeq, kind, status: "open", ...extra });
@@ -5437,7 +5437,7 @@
                   <div className="text-xs font-mono space-y-1">
                     <div data-testid="who-role" className="text-white">{ROLE_LABELS[identity.role] || identity.role}</div>
                     <div className="side-muted truncate" title={identity.email}>{identity.email}</div>
-                    <div data-testid="who-version" className="side-muted opacity-80">Server {identity.version || "older than v35 - redeploy the backend"} · Screen v55</div>
+                    <div data-testid="who-version" className="side-muted opacity-80">Server {identity.version || "older than v35 - redeploy the backend"} · Screen v56</div>
                     <div className="flex gap-3 mt-2">
                       {identity.can_change_password !== false && <button data-testid="change-password-open" onClick={() => setShowPw(true)} className="side-muted hover-w underline">Change password</button>}
                       <button onClick={onSignOut} className="side-muted hover-w underline">Sign out</button>
