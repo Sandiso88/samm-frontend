@@ -2282,7 +2282,7 @@
       const COMPARE_OPS = ["<=", "<", ">=", ">", "=", "<>"];
       const WHEN_OPS = ["=", "<>", "<", "<=", ">", ">="];       // v38: if-then rules
       const ARITH_OPS = ["+", "-", "*", "/"];
-      function MappingEditor({ dataset, jobId, api, onBuilt, onClose, onAsk }) {
+      function MappingEditor({ dataset, jobId, api, onBuilt, onClose, onAsk, extraRules }) {
         const [pm, setPm] = useState(null);
         const [err, setErr] = useState(null);
         const [edits, setEdits] = useState({});
@@ -2310,6 +2310,14 @@
           return () => { live = false; };
         }, [dataset]);
 
+        // v61: calculated fields and new fields chosen in the onboarding step arrive here and are listed with the other rules
+        const gotExtra = useRef(0);
+        useEffect(() => {
+          if (!pm || !extraRules || extraRules.length <= gotExtra.current) return;
+          const fresh = extraRules.slice(gotExtra.current); gotExtra.current = extraRules.length;
+          setRules((p) => [...p, ...fresh.map((r) => ({ ...r, id: "u" + (++seq.current) + Date.now().toString(36).slice(-4) }))]);
+          setTab("rules");
+        }, [extraRules ? extraRules.length : 0, !!pm]);
         if (!pm) return <div className="text-xs text-[#A0A0A0] p-3" data-testid="editor-loading">{err ? <ErrBox err={err} /> : "Reading the dataset..."}</div>;
         const cols = pm.rows.filter((r) => r.status !== "skip").map((r) => r.name);
         const canTech = pm.can_edit, canBiz = pm.can_edit_business;
@@ -2328,6 +2336,7 @@
           if (k === "compare") { r.column2 = nr.column2 || cols[0]; r.params = { op: nr.op }; }
           if (k === "derive") { r.column2 = nr.column2 || cols[0]; r.params = { op: ARITH_OPS.includes(nr.op) ? nr.op : "-" }; r.name = nr.name; }
           if (k === "unique") r.params = { require: !!nr.require };
+          if (k === "constant") { r.column = ""; r.name = nr.name; r.params = { value: nr.values }; }
           if (k === "if_then") { r.column2 = nr.column2 || cols[0]; r.params = { when_op: nr.wop, when_value: nr.wval, then: nr.then }; if (nr.then === "compare") { r.params.then_op = nr.top; r.params.then_value = nr.tval; } if (nr.then === "allowed") r.params.then_values = nr.tvals; }
           if (k === "no_match") { const rt = nr.rtab || Object.keys(pm.ref_tables || {})[0] || ""; r.params = { ref_dataset: rt, ref_column: nr.rcol || ((pm.ref_tables || {})[rt] || [])[0] || "" }; }
           setRules((p) => [...p, r]);
@@ -2424,7 +2433,7 @@
                     return (
                       <div key={r.id} data-testid="rule-row" className="flex flex-wrap items-center gap-2 text-xs bg-[#151515] border border-[#2D2D2D] rounded-md p-2">
                         <span className={"px-2 py-0.5 rounded text-[10px] font-mono " + (r.cls === "technical" ? "bg-blue-900 text-blue-200" : "bg-purple-900 text-purple-200")}>{r.cls}</span>
-                        <span className="font-mono text-white">{r.column}</span>
+                        <span className="font-mono text-white">{r.kind === "constant" ? "(new field)" : r.column}</span>
                         <span className="text-[#A0A0A0]">{label(r)}</span>
                         {r.kind === "range" && (<>
                           <input aria-label={"Minimum for " + r.id} type="number" disabled={dis} value={r.params.min == null ? "" : r.params.min} onChange={(e) => setParam(i, "min", e.target.value === "" ? null : Number(e.target.value))} className={inp + " w-20"} placeholder="min" />
@@ -2439,8 +2448,15 @@
                         </>)}
                         {r.kind === "derive" && (<>
                           <select aria-label={"Operation for " + r.id} disabled={dis} value={r.params.op} onChange={(e) => setParam(i, "op", e.target.value)} className={inp}>{ARITH_OPS.map((o) => <option key={o}>{o}</option>)}</select>
-                          <select aria-label={"Second field for " + r.id} disabled={dis} value={r.column2} onChange={(e) => setRule(i, { column2: e.target.value })} className={inp}>{cols.map((c) => <option key={c}>{c}</option>)}</select>
+                          {!r.column2 && (r.params || {}).const != null
+                            ? <input aria-label={"Number for " + r.id} type="number" disabled={dis} value={r.params.const} onChange={(e) => setParam(i, "const", e.target.value === "" ? null : Number(e.target.value))} className={inp + " w-24"} />
+                            : <select aria-label={"Second field for " + r.id} disabled={dis} value={r.column2} onChange={(e) => setRule(i, { column2: e.target.value })} className={inp}>{cols.map((c) => <option key={c}>{c}</option>)}</select>}
                           <input aria-label={"New column name for " + r.id} disabled={dis} value={r.name || ""} onChange={(e) => setRule(i, { name: e.target.value })} className={inp + " w-32"} placeholder="new column" />
+                        </>)}
+                        {r.kind === "constant" && (<>
+                          <input aria-label={"New field name for " + r.id} disabled={dis} value={r.name || ""} onChange={(e) => setRule(i, { name: e.target.value })} className={inp + " w-32"} placeholder="new field" />
+                          <span className="text-[#808080]">=</span>
+                          <input aria-label={"Value for " + r.id} disabled={dis} value={(r.params || {}).value == null ? "" : r.params.value} onChange={(e) => setParam(i, "value", e.target.value)} className={inp + " w-32"} placeholder="value" />
                         </>)}
                         {r.kind === "unique" && <label className="flex items-center gap-1 text-[11px] text-[#C0C0C0]"><input type="checkbox" aria-label={"Never empty for " + r.id} disabled={dis} checked={!!(r.params || {}).require} onChange={(e) => setParam(i, "require", e.target.checked)} />never empty (a key)</label>}
                         {r.kind === "if_then" && (<>
@@ -2470,7 +2486,8 @@
                     <div className="text-[11px] text-[#A0A0A0] flex flex-wrap gap-3">Add a rule<span data-testid="rule-count" className={rules.length >= (pm.max_rules || 60) ? "text-amber-300" : "text-[#808080]"}>{rules.length} of {pm.max_rules || 60} rules{rules.length >= (pm.max_rules || 60) ? " - the limit is reached, remove one to add another" : ""}</span></div>
                     <div className="flex flex-wrap items-center gap-2 text-xs">
                       <select aria-label="New rule type" value={nr.kind} onChange={(e) => setNr({ ...nr, kind: e.target.value })} className={inp}>{Object.keys(pm.rule_kinds).map((k) => <option key={k} value={k}>{pm.rule_kinds[k].help}</option>)}</select>
-                      <select aria-label="New rule field" value={nr.column} onChange={(e) => setNr({ ...nr, column: e.target.value })} className={inp}>{cols.map((c) => <option key={c}>{c}</option>)}</select>
+                      {nr.kind !== "constant" && <select aria-label="New rule field" value={nr.column} onChange={(e) => setNr({ ...nr, column: e.target.value })} className={inp}>{cols.map((c) => <option key={c}>{c}</option>)}</select>}
+                      {nr.kind === "constant" && (<><input aria-label="New field name" value={nr.name} onChange={(e) => setNr({ ...nr, name: e.target.value })} className={inp + " w-32"} placeholder="new field" /><span className="text-[#808080]">=</span><input aria-label="New field value" value={nr.values} onChange={(e) => setNr({ ...nr, values: e.target.value })} className={inp + " w-32"} placeholder="value" /></>)}
                       {nr.kind === "range" && (<><input aria-label="New rule minimum" type="number" value={nr.min} onChange={(e) => setNr({ ...nr, min: e.target.value })} className={inp + " w-20"} placeholder="min" /><input aria-label="New rule maximum" type="number" value={nr.max} onChange={(e) => setNr({ ...nr, max: e.target.value })} className={inp + " w-20"} placeholder="max" /></>)}
                       {nr.kind === "allowed" && <input aria-label="New rule values" value={nr.values} onChange={(e) => setNr({ ...nr, values: e.target.value })} className={inp + " w-48"} placeholder="a, b, c" />}
                       {nr.kind === "to_date" && <select aria-label="New rule date format" value={nr.fmt} onChange={(e) => setNr({ ...nr, fmt: e.target.value })} className={inp}>{DATE_FORMATS.map((f) => <option key={f}>{f}</option>)}</select>}
@@ -3995,7 +4012,10 @@
 
       // v35: direct database connections (additive: files and folders work exactly as before)
       const NEW_CLIENT = "__new_client__";
-      function DbPanel({ client, clientName, apiFor, onJobs, clients, clientNames, canAddClient, onClientsChanged }) {
+      function DbPanel({ client: clientProp, clientName, apiFor, onJobs, clients, clientNames, canAddClient, onClientsChanged, onPhase, onClientPicked }) {
+        const [client, setClient] = useState(clientProp);       // v61: the client this panel works on (follows the page, or the client a connection was just saved under)
+        useEffect(() => { setClient(clientProp); }, [clientProp]);
+        const pendingOpen = useRef(null);
         const api = useMemo(() => apiFor(client), [client]);
         const blank = { id: "", client: "", newClient: "", name: "", type: "sqlserver", host: "", port: "", database: "", user: "", password: "", encrypt: true, verify_cert: true };
         const [types, setTypes] = useState([]);
@@ -4007,7 +4027,7 @@
         const [incr, setIncr] = useState({});
         const [rowLimit, setRowLimit] = useState(1000000);
         const [sched, setSched] = useState({ every: "off", hour: 2, day: 0 });
-        const [toReports, setToReports] = useState(true);
+        const [toReports, setToReports] = useState(false);       // v61: the guided steps link and map before anything is published
         const [busy, setBusy] = useState("");
         const [msg, setMsg] = useState("");
         const [err, setErr] = useState(null);
@@ -4024,7 +4044,12 @@
             setTypes(t.types || []); setList(l.connections || []);
           } catch (e) { setErr(e); setList([]); }
         };
-        useEffect(() => { setSel(null); setTabs(null); setForm(null); setRun(null); setMsg(""); load(); }, [client]);
+        useEffect(() => {
+          setSel(null); setTabs(null); setForm(null); setRun(null);
+          if (!pendingOpen.current) setMsg("");
+          Promise.resolve(load()).then(() => { const c = pendingOpen.current; if (c) { pendingOpen.current = null; openTables(c, true); } });
+        }, [client]);
+        useEffect(() => { if (onPhase) onPhase(sel ? "tables" : "connect"); }, [sel ? sel.id : ""]);
         const typeOf = (id) => types.find((t) => t.id === id) || {};
         const save = async () => {
           setBusy("save"); setErr(null); setMsg("");
@@ -4042,14 +4067,23 @@
             if (!form.password) delete body.password;
             const r = await mine(body);
             const id = r.connection.id;
-            const where = owner === client ? "" : " Saved under " + ownerName + ": choose " + ownerName + " in the Client box to see it and extract its tables.";
-            try { const t = await mine({ action: "db_test", id }); setMsg("Saved for " + ownerName + ". Connected: " + t.tables + " table(s) and " + t.views + " view(s) found." + where); }
-            catch (e) { setErr(e); setMsg("Saved for " + ownerName + ", but the test connection failed (see below). Check the details and press Save again." + where); }
-            setForm(null); await load();
+            let good = false;
+            try { const t = await mine({ action: "db_test", id }); good = true; setMsg("Saved for " + ownerName + ". Connected: " + t.tables + " table(s) and " + t.views + " view(s) found. Now choose the tables you want."); }
+            catch (e) { setErr(e); setMsg("Saved for " + ownerName + ", but the test connection failed (see below). Check the details and press Save again."); }
+            setForm(null);
+            if (owner !== client) {                       // the guided steps carry on with the client the source belongs to
+              if (good) pendingOpen.current = r.connection;
+              if (onClientPicked) onClientPicked(owner);
+              setClient(owner);
+              if (!good) await load();
+            } else {
+              await load();
+              if (good) await openTables(r.connection, true);   // v61: straight on to choosing tables
+            }
           } catch (e) { setErr(e); } finally { setBusy(""); }
         };
-        const openTables = async (c) => {
-          setBusy("tables"); setErr(null); setMsg(""); setRun(null);
+        const openTables = async (c, keepMsg) => {
+          setBusy("tables"); setErr(null); if (!keepMsg) setMsg(""); setRun(null);
           try {
             const r = await api({ action: "db_tables", id: c.id });
             const p = {}, ic = {};
@@ -4121,7 +4155,7 @@
             {form && (
               <div data-testid="db-form" className="space-y-2 border border-[#2D2D2D] rounded-lg p-3">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  <label className="flex flex-col gap-1 text-[#C0C0C0] sm:col-span-2">Client name <span className="text-red-400" title="Required">*</span>
+                  <label className="flex flex-col gap-1 text-[#C0C0C0] sm:col-span-2"><span>Client name <span className="text-red-400" title="Required">*</span></span>
                     <select data-testid="db-client" required aria-required="true" value={form.client} disabled={!!form.id} onChange={(e) => setForm({ ...form, client: e.target.value })} className={field}>
                       <option value="">Choose the client this data belongs to…</option>
                       {(clients && clients.length ? clients : (client ? [client] : [])).map((c) => <option key={c} value={c}>{(clientNames || {})[c] || c}</option>)}
@@ -4129,14 +4163,14 @@
                     </select>
                     {form.id && <span className="text-[11px] text-[#808080]">A saved connection stays with its client.</span>}</label>
                   {form.client === NEW_CLIENT && (
-                    <label className="flex flex-col gap-1 text-[#C0C0C0] sm:col-span-2">New client's name <span className="text-red-400">*</span>
+                    <label className="flex flex-col gap-1 text-[#C0C0C0] sm:col-span-2"><span>New client's name <span className="text-red-400">*</span></span>
                       <input data-testid="db-new-client" value={form.newClient} onChange={(e) => setForm({ ...form, newClient: e.target.value })} placeholder="e.g. Landsec" className={field} /></label>
                   )}
                   <label className="flex flex-col gap-1 text-[#C0C0C0]">Type
                     <select data-testid="db-type" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value, port: "" })} className={field}>
                       {(types.length ? types : [{ id: "sqlserver", label: "SQL Server", available: true }]).map((t) => <option key={t.id} value={t.id}>{t.label}{t.available === false ? " (driver not installed)" : ""}</option>)}
                     </select></label>
-                  <label className="flex flex-col gap-1 text-[#C0C0C0]">Connection name <span className="text-red-400" title="Required">*</span>
+                  <label className="flex flex-col gap-1 text-[#C0C0C0]"><span>Connection name <span className="text-red-400" title="Required">*</span></span>
                     <input data-testid="db-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Finance system" className={field} /></label>
                   <label className="flex flex-col gap-1 text-[#C0C0C0]">Server address
                     <input data-testid="db-host" value={form.host} onChange={(e) => setForm({ ...form, host: e.target.value })} placeholder="e.g. db.example.com" className={field} /></label>
@@ -4203,7 +4237,7 @@
                   <label className="flex items-center gap-2">Row limit per table
                     <input data-testid="db-limit" value={rowLimit} onChange={(e) => setRowLimit(e.target.value.replace(/\D/g, ""))} className={field + " w-28"} /></label>
                 </div>
-                <label className="flex items-center gap-2 text-[#C0C0C0]"><input data-testid="db-to-reports" type="checkbox" checked={toReports} onChange={(e) => setToReports(e.target.checked)} /> Run all the way to reports (also keeps scheduled refreshes up to date)</label>
+                <label className="flex items-center gap-2 text-[#C0C0C0]"><input data-testid="db-to-reports" type="checkbox" checked={toReports} onChange={(e) => setToReports(e.target.checked)} /> Also publish a report for each table when it is loaded (you can do this later, after linking and mapping)</label>
                 <div className="flex flex-wrap gap-2">
                   <button data-testid="db-extract" onClick={extract} disabled={!!busy || nSel === 0} className="bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-bold text-sm px-4 py-2 rounded-lg">{busy === "run" ? "Extracting..." : "Extract " + nSel + " table" + (nSel === 1 ? "" : "s") + " now"}</button>
                   <button data-testid="db-keep" onClick={keepSel} disabled={!!busy} className="border border-[#3D3D3D] hover:border-amber-500 text-white text-sm px-4 py-2 rounded-lg">Save choices only</button>
@@ -4353,6 +4387,232 @@
         );
       }
 
+      // ------------------------------------------------------------------
+      // v61: guided onboarding for one client: Connect -> Choose tables -> Link -> Map & calculate.
+      // Every step reuses what SAMM already does (extract, automatic linking, field mapping and rules). This only puts it in order.
+      // ------------------------------------------------------------------
+      const WIZ_STEPS = [["connect", "Connect", "Name the client and say where its data comes from"], ["tables", "Choose tables", "Pick the tables you want and bring them in"],
+        ["link", "Link", "SAMM links this client's tables that belong together"], ["map", "Map & calculate", "Standard names, calculated fields and views"]];
+      const WIZ_ORDER = ["connect", "tables", "link", "map", "done"];
+      const wizSlug = (x) => { let n = String(x || "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 60); if (n && !/^[a-z]/.test(n)) n = "f_" + n; return n; };
+
+      function OnboardStepper({ phase, reached, onGo, clientLabel }) {
+        const cur = WIZ_ORDER.indexOf(phase);
+        return (
+          <div data-testid="onb-stepper" className="space-y-2">
+            <ol className="flex flex-wrap items-center gap-2 text-xs">
+              {WIZ_STEPS.map(([id, label, tip], n) => {
+                const done = n < cur, now = n === cur, can = n <= reached && !now;
+                return (
+                  <li key={id} className="flex items-center gap-2">
+                    <button type="button" data-testid={"step-" + id} aria-current={now ? "step" : undefined} disabled={!can} title={tip} onClick={() => onGo(id)}
+                      className={"flex items-center gap-2 px-3 py-1.5 rounded-lg font-semibold border transition " + (now ? "border-amber-500 bg-amber-500/10 text-amber-300" : done ? "border-green-700 text-green-300 hover:border-green-500" : "border-[#3D3D3D] text-[#808080]") + (can ? "" : " cursor-default")}>
+                      <span className={"w-5 h-5 rounded-full text-[10px] flex items-center justify-center border " + (now ? "border-amber-500" : done ? "border-green-600" : "border-[#4a4a4a]")}>{done ? "✓" : n + 1}</span>{label}
+                    </button>
+                    {n < WIZ_STEPS.length - 1 && <span className="text-[#4b5a7a]" aria-hidden="true">›</span>}
+                  </li>
+                );
+              })}
+            </ol>
+            {clientLabel && <div data-testid="onb-stepper-client" className="text-[11px] text-[#808080]">Onboarding data for <b className="text-white">{clientLabel}</b></div>}
+          </div>
+        );
+      }
+
+      function WizBar({ back, backLabel, next, nextLabel, nextOff, hint, testid, alt }) {
+        return (
+          <div data-testid={testid || "wiz-bar"} className="flex flex-wrap items-center gap-3 pt-1">
+            {back && <button type="button" data-testid="wiz-back" onClick={back} className="border border-[#3D3D3D] hover:border-amber-500 text-white text-sm px-4 py-2 rounded-lg">← {backLabel || "Back"}</button>}
+            <span data-testid="wiz-hint" className="flex-1 min-w-[12rem] text-[11px] text-[#A0A0A0]">{hint}</span>
+            {alt && <button type="button" data-testid="wiz-alt" onClick={alt.onClick} disabled={alt.busy} className="text-xs text-amber-400 hover:text-amber-300 underline disabled:opacity-60">{alt.label}</button>}
+            {next && <button type="button" data-testid="wiz-next" onClick={next} disabled={nextOff} className="bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-bold text-sm px-5 py-2 rounded-lg">{nextLabel} →</button>}
+          </div>
+        );
+      }
+
+      // Step 3: this client's tables are ticked for linking and SAMM links the ones that belong together on its own.
+      function WizLink({ api, role, datasets, onBack, onNext }) {
+        const [st, setSt] = useState({ busy: true, prog: "", text: "", err: null, tick: 0 });
+        const key = datasets.join("|");
+        useEffect(() => {
+          let live = true;
+          (async () => {
+            setSt((s) => ({ ...s, busy: true, prog: "Choosing this client's tables...", text: "", err: null }));
+            try {
+              let cur = [];
+              try { const sc = await api({ action: "links_scope_get" }); cur = sc && Array.isArray(sc.selected) ? sc.selected : []; } catch (_) { /* start from this onboarding's tables */ }
+              await api({ action: "links_scope_set", datasets: Array.from(new Set([...cur, ...datasets])) });
+              const r = await autoLinkRun(api, (p) => { if (live) setSt((s) => ({ ...s, prog: p })); }, undefined, true);
+              try { await api({ action: "drill_auto" }); } catch (_) { /* drill-downs are a bonus */ }
+              if (live) setSt((s) => ({ ...s, busy: false, prog: "", text: r.text || (datasets.length < 2 ? "There is only one table so far, so there is nothing to link yet." : "SAMM found no new links to make."), tick: s.tick + 1 }));
+            } catch (e) { if (live) setSt((s) => ({ ...s, busy: false, prog: "", err: e, tick: s.tick + 1 })); }
+          })();
+          return () => { live = false; };
+        }, [key]);
+        return (
+          <div data-testid="wiz-link" className="space-y-4">
+            <div className="rounded-xl border border-[#2D2D2D] p-4 space-y-2">
+              <div className="text-sm font-semibold text-white">Link this client's tables</div>
+              <p className="text-xs text-[#A0A0A0]">SAMM compares the values in each table (for example site codes or fiscal years) and links the tables that belong together. Links it is sure about are approved for you; the rest wait below for your decision. Only this client's tables are used.</p>
+              {st.busy && <div data-testid="wiz-link-busy" className="text-xs text-amber-300">⏳ {st.prog || "Working..."}</div>}
+              {!st.busy && st.text && <div data-testid="wiz-link-result" className="text-xs text-green-300">{st.text}</div>}
+              <ErrBox err={st.err} />
+            </div>
+            {!st.busy && <LinksPanel key={st.tick} api={api} role={role} />}
+            <WizBar back={onBack} backLabel="Back to tables" next={onNext} nextLabel="Next: map & calculate" nextOff={st.busy} hint={st.busy ? "Linking... this takes a moment." : "Happy with the links? Go on to the field mapping."} />
+          </div>
+        );
+      }
+
+      // Step 4, one table: how much SAMM matched by itself, calculations and views it suggests, your own fields, then the mapping editor.
+      function MapCard({ api, d, open, onToggle, onAsk, onBuilt }) {
+        const [sug, setSug] = useState(null);
+        const [err, setErr] = useState(null);
+        const [extra, setExtra] = useState([]);
+        const [note, setNote] = useState("");
+        const [f, setF] = useState({ kind: "calc", name: "", a: "", op: "*", b: "", num: "", useNum: false, value: "" });
+        const [built, setBuilt] = useState(0);
+        const load = async () => { try { setSug(await api({ action: "calc_suggest", dataset: d.ds })); setErr(null); } catch (e) { setErr(e); } };
+        useEffect(() => { if (open && !sug && !err) load(); }, [open]);
+        const title = (d.view && titleOf(d.view)) || friendlyDs(d.ds);
+        const cols = sug ? (sug.columns || []) : [];
+        const numCols = cols.filter((c) => c.kind === "double").length >= 2 ? cols.filter((c) => c.kind === "double") : cols;
+        const names = new Set([...(sug ? (sug.added || []).map((a) => a.name) : []), ...extra.map((r) => r.name)]);
+        const addRule = (rule, text) => {
+          if (names.has(rule.name)) { setNote("There is already a field called " + rule.name + "."); return; }
+          setExtra((p) => [...p, rule]); setNote(text + " Press Approve below to build it into the Gold view.");
+        };
+        const addCustom = () => {
+          const name = wizSlug(f.name);
+          if (!name) { setNote("Give the new field a name."); return; }
+          if (f.kind === "calc") {
+            if (!f.a) { setNote("Choose the first field."); return; }
+            if (!f.useNum && !f.b) { setNote("Choose the second field, or a number."); return; }
+            if (f.useNum && (f.num === "" || !isFinite(Number(f.num)))) { setNote("Type the number to use."); return; }
+            addRule({ kind: "derive", column: f.a, ...(f.useNum ? {} : { column2: f.b }), params: { op: f.op, ...(f.useNum ? { const: Number(f.num) } : {}) }, name, status: "active", origin: "user" }, "Added the calculated field " + name + ".");
+          } else {
+            if (f.value === "") { setNote("Type the value every row should have."); return; }
+            addRule({ kind: "constant", column: "", params: { value: f.value }, name, status: "active", origin: "user" }, "Added the field " + name + ".");
+          }
+          setF({ ...f, name: "", num: "", value: "" });
+        };
+        const inp = "bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-white text-xs focus:outline-none focus:border-amber-500";
+        const m = sug && sug.mapping;
+        const ready = d.state === "done" || d.state === "review";
+        return (
+          <div data-testid="map-card" className="border border-[#2D2D2D] rounded-xl bg-[#1B1B1B]">
+            <button type="button" data-testid="map-card-head" aria-expanded={open} onClick={onToggle} className="w-full flex flex-wrap items-center gap-3 px-4 py-3 text-left">
+              <span className="text-sm font-semibold text-white">{title}</span>
+              <span className="text-[11px] font-mono text-[#808080]">{d.ds}</span>
+              <span className="flex-1" />
+              {m && <span data-testid="map-summary-chip" className="text-[10px] font-mono px-2 py-0.5 rounded bg-green-900 text-green-200">{m.matched} of {m.fields} matched</span>}
+              {built > 0 && <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-blue-900 text-blue-200">Gold view updated</span>}
+              <span aria-hidden="true" className="text-[#808080]">{open ? "▾" : "▸"}</span>
+            </button>
+            {open && (
+              <div className="px-4 pb-4 space-y-4">
+                {!ready && <div data-testid="map-notready" className="text-xs text-amber-200 bg-[#241E10] border border-amber-800 rounded p-2">SAMM is still bringing this table in. Go back to "Choose tables" and answer anything it asks, then come back here.</div>}
+                <ErrBox err={err} />
+                {ready && !sug && !err && <div className="text-xs text-[#A0A0A0]">SAMM is reading the table...</div>}
+                {ready && sug && (<>
+                  <div data-testid="map-auto" className="text-xs text-[#C0C0C0]">
+                    SAMM matched <b className="text-white">{m.matched}</b> of {m.fields} fields to your standard names on its own{m.review ? "; " + m.review + " need a look" : ""}{m.own_name ? "; " + m.own_name + " keep their own name" : ""}{m.hidden ? "; " + m.hidden + " copies are hidden" : ""}. Check the table below, add what you need, then press Approve.
+                  </div>
+                  {note && <div data-testid="map-note" className="text-xs text-green-300">{note}</div>}
+                  <div className="space-y-2">
+                    <div className="text-xs font-semibold text-white">Suggested calculations</div>
+                    {sug.calculations.length === 0 && <div className="text-[11px] text-[#808080]">No obvious calculation for this table. You can add your own below.</div>}
+                    {sug.calculations.map((c) => {
+                      const on = names.has(c.name) || extra.some((r) => r.name === c.name);
+                      return (
+                        <div key={c.id} data-testid="calc-suggestion" className="flex flex-wrap items-center gap-2 text-xs bg-[#151515] border border-[#2D2D2D] rounded-md p-2">
+                          <span className="font-mono text-white">{c.name}</span><span className="text-[#C0C0C0]">= {c.label}</span><span className="text-[#808080] flex-1 min-w-[10rem]">{c.why}</span>
+                          <button type="button" data-testid="calc-add" disabled={on} onClick={() => addRule(c.rule, "Added " + c.name + ".")} className="border border-[#3D3D3D] hover:border-amber-500 disabled:opacity-60 text-white px-3 py-1 rounded-md">{on ? "Added ✓" : "Add"}</button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="space-y-2">
+                    <div className="text-xs font-semibold text-white">Add a field of your own</div>
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <select data-testid="add-kind" aria-label="What to add" value={f.kind} onChange={(e) => setF({ ...f, kind: e.target.value })} className={inp}><option value="calc">Calculated field</option><option value="constant">Field with a fixed value</option></select>
+                      <input data-testid="add-name" aria-label="Name of the new field" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="name, e.g. total_with_vat" className={inp + " w-44"} />
+                      {f.kind === "calc" ? (<>
+                        <span className="text-[#808080]">=</span>
+                        <select data-testid="add-a" aria-label="First field" value={f.a} onChange={(e) => setF({ ...f, a: e.target.value })} className={inp}><option value="">(first field)</option>{numCols.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}</select>
+                        <select data-testid="add-op" aria-label="Operation" value={f.op} onChange={(e) => setF({ ...f, op: e.target.value })} className={inp}>{["*", "/", "+", "-"].map((o) => <option key={o}>{o}</option>)}</select>
+                        {f.useNum
+                          ? <input data-testid="add-num" aria-label="A number" type="number" value={f.num} onChange={(e) => setF({ ...f, num: e.target.value })} className={inp + " w-24"} placeholder="number" />
+                          : <select data-testid="add-b" aria-label="Second field" value={f.b} onChange={(e) => setF({ ...f, b: e.target.value })} className={inp}><option value="">(second field)</option>{numCols.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}</select>}
+                        <label className="flex items-center gap-1 text-[#C0C0C0]"><input data-testid="add-usenum" type="checkbox" checked={f.useNum} onChange={(e) => setF({ ...f, useNum: e.target.checked })} /> use a number instead</label>
+                      </>) : (<>
+                        <span className="text-[#808080]">=</span>
+                        <input data-testid="add-value" aria-label="Value on every row" value={f.value} onChange={(e) => setF({ ...f, value: e.target.value })} placeholder="value on every row" className={inp + " w-44"} />
+                      </>)}
+                      <button type="button" data-testid="add-field" onClick={addCustom} className="border border-[#3D3D3D] hover:border-amber-500 text-white px-3 py-1 rounded-md">Add</button>
+                    </div>
+                    {(sug.added || []).length > 0 && <div className="text-[11px] text-[#808080]">Already in the Gold view: {(sug.added || []).map((a) => a.text).join("; ")}.</div>}
+                  </div>
+                  <div className="space-y-1">
+                    <div className="text-xs font-semibold text-white">Suggested views</div>
+                    {sug.views.length === 0 && <div className="text-[11px] text-[#808080]">No view to suggest yet.</div>}
+                    {sug.views.map((v) => (
+                      <div key={v.question} data-testid="view-suggestion" className="flex flex-wrap items-center gap-2 text-xs">
+                        <span className="text-[#C0C0C0] flex-1 min-w-[10rem]">{v.question}</span>
+                        <button type="button" data-testid="view-ask" disabled={!d.view} onClick={() => onAsk(d.view, v.question)} className="text-amber-400 hover:text-amber-300 underline disabled:opacity-50">Ask SAMM</button>
+                      </div>
+                    ))}
+                  </div>
+                </>)}
+                {ready && (
+                  <div className="space-y-1">
+                    <div className="text-xs font-semibold text-white">Field mapping and rules</div>
+                    <MappingEditor key={d.ds} dataset={d.ds} jobId={d.state === "review" ? d.jobId : null} api={api} extraRules={extra}
+                      onAsk={(v) => onAsk(v)} onBuilt={(j) => { setExtra([]); setBuilt((n) => n + 1); setNote(""); load(); onBuilt(j); }} />
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      }
+
+      function WizMap({ api, datasets, onAsk, onBuilt, onBack, onNext }) {
+        const [open, setOpen] = useState(datasets.length ? datasets[0].ds : "");
+        return (
+          <div data-testid="wiz-map" className="space-y-3">
+            <div className="rounded-xl border border-[#2D2D2D] p-4 space-y-1">
+              <div className="text-sm font-semibold text-white">Map &amp; calculate</div>
+              <p className="text-xs text-[#A0A0A0]">SAMM has already matched each table's fields to your standard names. Open a table to check the match, add the calculated fields SAMM suggests (or your own), and see the views worth building. One table is open at a time.</p>
+            </div>
+            {datasets.length === 0 && <div className="text-xs text-amber-200">There are no tables to map yet. Go back and bring some in.</div>}
+            {datasets.map((d) => <MapCard key={d.ds} api={api} d={d} open={open === d.ds} onToggle={() => setOpen(open === d.ds ? "" : d.ds)} onAsk={onAsk} onBuilt={onBuilt} />)}
+            <WizBar back={onBack} backLabel="Back to linking" next={onNext} nextLabel="Finish" hint="When you have approved the tables you want, press Finish." />
+          </div>
+        );
+      }
+
+      function WizDone({ client, clientLabel, datasets, onAsk, onReports, onDatasets, onAnother, onPublish }) {
+        const [pub, setPub] = useState({ busy: false, msg: "", err: null });
+        const go = async () => { setPub({ busy: true, msg: "", err: null }); try { setPub({ busy: false, msg: await onPublish(), err: null }); } catch (e) { setPub({ busy: false, msg: "", err: e }); } };
+        const first = datasets.find((d) => d.view);
+        return (
+          <div data-testid="wiz-done" className="rounded-xl border border-green-700 bg-[#10241A] p-5 space-y-3">
+            <div className="text-base font-bold text-green-300">✓ {clientLabel || "This client"} is onboarded</div>
+            <div className="text-xs text-[#C0C0C0]">{datasets.length} table{datasets.length === 1 ? "" : "s"} brought in, linked and mapped. Everything is in Gold, ready to ask questions about.</div>
+            <div className="flex flex-wrap gap-2">
+              {first && <button data-testid="done-ask" onClick={() => onAsk(first.view)} className="bg-amber-600 hover:bg-amber-500 text-white font-bold text-sm px-4 py-2 rounded-lg">Ask SAMM about this data</button>}
+              <button data-testid="done-publish" disabled={pub.busy} onClick={go} className="border border-[#3D3D3D] hover:border-amber-500 disabled:opacity-60 text-white text-sm px-4 py-2 rounded-lg">{pub.busy ? "Building reports..." : "Build a report for each table"}</button>
+              <button data-testid="done-reports" onClick={onReports} className="border border-[#3D3D3D] hover:border-amber-500 text-white text-sm px-4 py-2 rounded-lg">Go to Reports</button>
+              <button data-testid="done-datasets" onClick={onDatasets} className="border border-[#3D3D3D] hover:border-amber-500 text-white text-sm px-4 py-2 rounded-lg">See the data</button>
+              <button data-testid="done-another" onClick={onAnother} className="border border-[#3D3D3D] hover:border-amber-500 text-white text-sm px-4 py-2 rounded-lg">Onboard another source</button>
+            </div>
+            {pub.msg && <div data-testid="done-pub-msg" className="text-xs text-green-300">{pub.msg}</div>}
+            <ErrBox err={pub.err} />
+          </div>
+        );
+      }
+
       function OnboardingHub({ session, onAsk, onViewsChanged, clients, clientNames, acting, mode, onMode, canAddClient, onClientsChanged }) {
         const [items, setItems] = useState([]);
         const [over, setOver] = useState(false);
@@ -4392,7 +4652,18 @@
         }, [items.length]);
         const api = (payload) => callBackend(session.url, session.token, payload);
         const [target, setTarget] = useState("");
-        const nowClient = () => target || acting || window.__sammClient || window.__sammHome || undefined;
+        const NONE_CLIENT = "__none__";
+        // v61: the client is chosen on purpose. "" / NONE = not chosen yet, NEW = a new client is being named
+        const nowClient = () => (target === NONE_CLIENT || target === NEW_CLIENT ? undefined : (target || acting || window.__sammClient || window.__sammHome || undefined));
+        const [phase, setPhase] = useState("connect");        // v61: connect -> tables -> link -> map -> done
+        const [reached, setReached] = useState(0);
+        const goPhase = (p) => {
+          setPhase(p); setReached((r) => Math.max(r, WIZ_ORDER.indexOf(p)));
+          setTimeout(() => { const el = document.querySelector("[data-testid=onb-stepper]"); if (el && el.scrollIntoView) el.scrollIntoView({ block: "start", behavior: "smooth" }); }, 50);
+        };
+        const dbPhase = (p) => { setPhase((cur) => (cur === "connect" || cur === "tables" ? p : cur)); setReached((r) => Math.max(r, WIZ_ORDER.indexOf(p))); };
+        useEffect(() => { setPhase("connect"); setReached(0); }, [acting]);
+        const [newClient, setNewClient] = useState({ name: "", busy: false, err: null });
         // Each upload is tied to the client it was started under, so switching client never breaks a running job.
         const apiFor = (client) => { const f = (payload) => callBackend(session.url, session.token, client ? { ...payload, client } : payload); f.__client = client; return f; };
         const upd = (id, patch) => setItems((p) => p.map((i) => (i.id === id ? { ...i, ...patch } : i)));
@@ -4484,13 +4755,13 @@
             setItems((p) => [{ id, client: c, name: sf.file.name, size: sf.file.size, stage: "upload", msg: "Queued", datasets: {}, order: [], error: null, done: false }, ...p]);
             runFile(id, sf.file, c, sf.name.trim());
           });
-          setStaged([]);
+          setStaged([]); goPhase("tables");
         };
 
         // v34: choose a whole folder for one client and run it all the way to reports
         const DATA_EXT = /\.(csv|tsv|json|jsonl|txt|xlsx|xlsm)$/i;
         const [folder, setFolder] = useState(null);
-        const [toReports, setToReports] = useState(true);
+        const [toReports, setToReports] = useState(false);       // v61: the guided steps map and link first; this skips them
         const [runs, setRuns] = useState([]);
         const pickFolder = (fileList) => {
           const all = Array.from(fileList || []);
@@ -4508,7 +4779,7 @@
             runFile(id, file, folder.client, "", { toReports, batch });
           });
           if (toReports) setRuns((p) => [{ id: batch, client: folder.client, folder: folder.name, total: ids.length, status: "running", msg: "", reports: [], failed: 0 }, ...p]);
-          setFolder(null);
+          setFolder(null); goPhase("tables");
         };
         const [method, setMethod] = useState("files");
         const addDbJobs = async ({ client, batch, name, toReports: tr, tables }) => {
@@ -4582,6 +4853,39 @@
           }
         };
 
+        // v61: what this onboarding has brought in for the client being worked on
+        const wizClient = nowClient();
+        const wizItems = items.filter((i) => i.client === wizClient && !i.error);
+        const [heldDs, setHeldDs] = useState({ client: "", list: [], busy: false });     // the tables the client already holds, when nothing new was brought in
+        const wizDs = [];
+        wizItems.forEach((i) => {
+          Object.entries((i.job && i.job.datasets) || {}).forEach(([ds, dd]) => { if (!wizDs.some((x) => x.ds === ds)) wizDs.push({ ds, state: dd.state, view: dd.view || "", jobId: i.job.id }); });
+          (i.order || []).forEach((ds) => { if (!wizDs.some((x) => x.ds === ds)) wizDs.push({ ds, state: "done", view: "", jobId: null }); });
+        });
+        if (wizDs.length === 0 && heldDs.client === wizClient) heldDs.list.forEach((d) => wizDs.push(d));
+        const useHeld = async () => {
+          setHeldDs((h) => ({ ...h, busy: true }));
+          try {
+            const r = await apiFor(wizClient)({ action: "datasets" });
+            setHeldDs({ client: wizClient, busy: false, list: (r.datasets || []).filter((d) => d.view).map((d) => ({ ds: d.dataset, state: "done", view: d.view, jobId: null })) });
+            goPhase("link");
+          } catch (e) { setHeldDs((h) => ({ ...h, busy: false })); setPipe({ busy: false, msg: "", err: e }); }
+        };
+        const wizLive = wizItems.some(liveItem);
+        const wizWaiting = wizDs.some((d) => d.state === "approval");
+        const wizReady = wizDs.length > 0 && !wizLive && !wizWaiting;
+        const wizLabel = (clientNames || {})[wizClient] || wizClient || "";
+        const srcVisible = phase === "connect" || phase === "tables";
+        const updJob = (j) => { if (j) setItems((p) => p.map((i) => (i.job && i.job.id === j.id ? { ...i, job: j } : i))); };
+        const publishAll = async () => {
+          const a = apiFor(wizClient);
+          const tg = (await a({ action: "batch_targets", datasets: wizDs.map((d) => d.ds) })).targets || [];
+          let ok = 0, bad = 0;
+          for (const t of tg) { try { await a({ action: "report_publish", dataset: t.dataset }); ok++; } catch (_) { bad++; } }
+          onViewsChanged();
+          return ok ? "Published " + ok + " report" + (ok === 1 ? "" : "s") + (bad ? " (" + bad + " could not be published)" : "") + ". Find them under Reports." : "No report could be published yet. Open a table in Reports to build one.";
+        };
+        const restartWizard = () => { setItems([]); setStaged([]); setFolder(null); goPhase("connect"); setReached(0); setMethod("files"); };
         const badge = (st) => {
           const c = { auto: "bg-green-900 text-green-200", review: "bg-amber-900 text-amber-200", saved: "bg-blue-900 text-blue-200", new: "bg-[#333] text-[#BBB]", duplicate: "bg-[#333] text-[#BBB]", skip: "bg-[#333] text-[#777]" }[st] || "bg-[#333] text-[#BBB]";
           return <span className={"px-2 py-0.5 rounded text-[10px] font-mono " + c}>{st}</span>;
@@ -4596,6 +4900,7 @@
                   ? "Where data comes in from. Add a file or folder, or connect a database. SAMM keeps the original (Bronze), turns it into rows and columns (Silver), suggests how its columns match your standard names, and builds a view you can ask questions about (Gold). csv, tsv, json, jsonl, txt and Excel are structured; other formats are archived untouched."
                   : "Everything SAMM holds for this client: the original files (Bronze), the converted tables (Silver), how tables link together, the views you ask questions about (Gold), who can see what, and Teach & test."}</p>
               </div>
+              {mode === "connections" && <OnboardStepper phase={phase} reached={reached} onGo={goPhase} clientLabel={wizClient ? wizLabel : ""} />}
               {mode !== "connections" && (
               <div data-testid="onb-tabs" role="tablist" className="flex flex-wrap gap-2 border-b border-[#2D2D2D] pb-3">
                 {[["bronze", "Bronze", "The original files, exactly as uploaded"], ["silver", "Silver", "Converted tables"], ["links", "Links & drill-down", "Tables that belong together"], ["gold", "Gold views", "Ready to use: ask questions, publish reports"], ["describe", "Describe rules", "Write data rules or a calculated column in plain words"], ["access", "Access & review", "Which analysts see which dataset, and rows that break a rule"], ["tools", "Teach & test", "Teach SAMM and self-test"]].map(([id, label, tip]) => (
@@ -4604,13 +4909,29 @@
                 ))}
               </div>
               )}
-              {tab === "upload" && (<>
-              {(clients || []).length > 1 && (
-                <label className="flex flex-wrap items-center gap-2 text-xs text-[#C0C0C0]">Which client is this data for?
-                  <select data-testid="onb-client" aria-label="Client for this data" value={target || acting} onChange={(e) => setTarget(e.target.value)} className="bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-white">
-                    {clients.map((c) => <option key={c} value={c}>{(clientNames || {})[c] || c}</option>)}
-                  </select>
-                </label>
+              {tab === "upload" && (<div className={srcVisible ? "space-y-4" : "hidden"}>
+              {method === "files" && (
+                <div data-testid="onb-client-box" className="rounded-lg border border-[#2D2D2D] p-3 space-y-2 text-xs text-[#C0C0C0]">
+                  <label className="flex flex-col gap-1"><span>Client name <span className="text-red-400" title="Required">*</span></span>
+                    <select data-testid="onb-client" aria-label="Client name" required aria-required="true" value={target === NONE_CLIENT ? "" : target === NEW_CLIENT ? NEW_CLIENT : (target || acting || "")} onChange={(e) => { setTarget(e.target.value === "" ? NONE_CLIENT : e.target.value); setNewClient({ name: "", busy: false, err: null }); }} className="w-full bg-[#2D2D2D] border border-[#3D3D3D] rounded-md py-2 px-3 text-sm text-white">
+                      <option value="">Choose the client this data belongs to…</option>
+                      {((clients || []).length ? clients : (acting ? [acting] : [])).map((c) => <option key={c} value={c}>{(clientNames || {})[c] || c}</option>)}
+                      {canAddClient && <option value={NEW_CLIENT}>+ Add a new client…</option>}
+                    </select></label>
+                  {target === NEW_CLIENT && (
+                    <div className="flex flex-wrap items-end gap-2">
+                      <label className="flex flex-col gap-1 flex-1 min-w-[12rem]"><span>New client's name <span className="text-red-400">*</span></span>
+                        <input data-testid="onb-new-client" value={newClient.name} onChange={(e) => setNewClient({ ...newClient, name: e.target.value })} placeholder="e.g. Landsec" className="w-full bg-[#2D2D2D] border border-[#3D3D3D] rounded-md py-2 px-3 text-sm text-white" /></label>
+                      <button type="button" data-testid="onb-new-client-add" disabled={newClient.busy || newClient.name.trim().length < 2} onClick={async () => {
+                        setNewClient((n) => ({ ...n, busy: true, err: null }));
+                        try { const r = await api({ action: "client_add", name: newClient.name }); if (onClientsChanged) onClientsChanged(); setTarget(r.id); setNewClient({ name: "", busy: false, err: null }); }
+                        catch (e) { setNewClient((n) => ({ ...n, busy: false, err: e })); }
+                      }} className="bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-bold text-sm px-4 py-2 rounded-lg">{newClient.busy ? "Adding..." : "Add the client"}</button>
+                    </div>
+                  )}
+                  <ErrBox err={newClient.err} />
+                  {!wizClient && <div data-testid="onb-client-need" className="text-[11px] text-amber-300">Choose the client first. Every file and every table is filed under a named client.</div>}
+                </div>
               )}
               <div data-testid="method-picker" className="flex flex-wrap items-center gap-2 text-xs">
                 <span className="text-[#A0A0A0]">Bring data in from:</span>
@@ -4618,21 +4939,22 @@
                   <button key={id} data-testid={"method-" + id} aria-pressed={method === id} onClick={() => setMethod(id)} className={"px-3 py-1.5 rounded-lg font-semibold border " + (method === id ? "border-amber-500 bg-amber-500/10 text-amber-300" : "border-[#3D3D3D] text-[#C0C0C0] hover:border-amber-500")}>{label}</button>
                 ))}
               </div>
-              {method === "db" && <DbPanel client={nowClient()} clientName={(clientNames || {})[nowClient()]} apiFor={apiFor} onJobs={addDbJobs} clients={clients} clientNames={clientNames} canAddClient={canAddClient} onClientsChanged={onClientsChanged} />}
+              {method === "db" && <DbPanel client={nowClient()} clientName={(clientNames || {})[nowClient()]} apiFor={apiFor} onJobs={addDbJobs} clients={clients} clientNames={clientNames} canAddClient={canAddClient} onClientsChanged={onClientsChanged} onPhase={dbPhase} onClientPicked={(c) => setTarget(c)} />}
               {method === "files" && (<>
               <label
                 htmlFor="onb-file"
-                onDragOver={(e) => { e.preventDefault(); setOver(true); }}
+                onDragOver={(e) => { e.preventDefault(); if (wizClient) setOver(true); }}
                 onDragLeave={() => setOver(false)}
-                onDrop={(e) => { e.preventDefault(); setOver(false); addFiles(e.dataTransfer.files); }}
-                className={"block cursor-pointer text-center rounded-xl border-2 border-dashed p-8 text-sm transition " + (over ? "border-amber-500 bg-[#2A2418]" : "border-[#3D3D3D] hover:border-amber-600")}
+                onDrop={(e) => { e.preventDefault(); setOver(false); if (wizClient) addFiles(e.dataTransfer.files); }}
+                aria-disabled={!wizClient}
+                className={"block text-center rounded-xl border-2 border-dashed p-8 text-sm transition " + (!wizClient ? "opacity-50 cursor-not-allowed border-[#3D3D3D]" : "cursor-pointer " + (over ? "border-amber-500 bg-[#2A2418]" : "border-[#3D3D3D] hover:border-amber-600"))}
               >
                 <div className="text-white font-semibold">Drop files here, or click to choose</div>
                 <div className="text-[11px] text-[#808080] mt-1">Up to 25 MB for csv/json/txt, 50 MB for Excel, 100 MB for archives</div>
-                <input id="onb-file" data-testid="onb-file" type="file" multiple accept={ACCEPT} className="hidden" onChange={(e) => { addFiles(e.target.files); e.target.value = ""; }} />
+                <input id="onb-file" data-testid="onb-file" type="file" multiple accept={ACCEPT} disabled={!wizClient} className="hidden" onChange={(e) => { addFiles(e.target.files); e.target.value = ""; }} />
               </label>
               <div className="text-[11px] text-[#808080]">or <label htmlFor="onb-folder" data-testid="folder-choose" className="underline cursor-pointer text-amber-400 hover:text-amber-300">choose a whole folder</label> for one client and let SAMM take it all the way to reports.
-                <input id="onb-folder" data-testid="onb-folder" type="file" multiple webkitdirectory="" directory="" className="hidden" onChange={(e) => { pickFolder(e.target.files); e.target.value = ""; }} /></div>
+                <input id="onb-folder" data-testid="onb-folder" type="file" multiple webkitdirectory="" directory="" disabled={!wizClient} className="hidden" onChange={(e) => { pickFolder(e.target.files); e.target.value = ""; }} /></div>
               {folder && (
                 <div data-testid="folder-card" className="border border-[#3D3D3D] rounded-xl p-4 space-y-3 bg-[#1E1E1E] text-xs">
                   {folder.files.length === 0 && (
@@ -4650,7 +4972,7 @@
                     </label>
                   )}
                   <div className="text-[11px] text-[#808080] max-h-24 overflow-auto font-mono">{folder.files.slice(0, 40).map((f) => f.name).join(", ")}{folder.files.length > 40 ? " ..." : ""}</div>
-                  <label className="flex items-center gap-2 text-[#C0C0C0]"><input data-testid="folder-to-reports" type="checkbox" checked={toReports} onChange={(e) => setToReports(e.target.checked)} /> Run all the way to reports (SAMM maps, builds, links and publishes a report for each Gold view without stopping to ask)</label>
+                  <label className="flex items-center gap-2 text-[#C0C0C0]"><input data-testid="folder-to-reports" type="checkbox" checked={toReports} onChange={(e) => setToReports(e.target.checked)} /> Skip the steps: SAMM maps, builds, links and publishes a report for each Gold view without stopping to ask</label>
                   <div className="flex gap-2">
                     <button data-testid="folder-go" disabled={!folder.files.length} onClick={startFolder} className="bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-bold text-sm px-4 py-2 rounded-lg">Upload {folder.files.length} file{folder.files.length === 1 ? "" : "s"} to {(clientNames || {})[folder.client] || folder.client}</button>
                     <button onClick={() => setFolder(null)} className="border border-[#3D3D3D] text-white text-sm px-4 py-2 rounded-lg">Cancel</button>
@@ -4688,10 +5010,15 @@
                 <span className="text-[11px] text-[#808080]">Processes files that are already in Bronze with your orchestrator.</span></div></details>
               {pipe.msg && <div className="text-xs text-green-300">{pipe.msg}</div>}
               <ErrBox err={pipe.err} />
-              </>)}
+              </div>)}
+              {mode === "connections" && (phase === "tables" || (phase === "connect" && wizReady)) && (
+                <WizBar testid="wiz-bar-tables" back={null} alt={!wizReady && !wizLive && wizClient ? { label: "or use the tables " + (wizLabel || "this client") + " already has", onClick: useHeld, busy: heldDs.busy } : null}
+                  next={() => goPhase("link")} nextLabel="Next: link the tables" nextOff={!wizReady}
+                  hint={wizWaiting ? "SAMM needs you to confirm some fields in the list below before it can go on." : wizLive ? "SAMM is bringing your data in..." : wizReady ? wizDs.length + " table" + (wizDs.length === 1 ? "" : "s") + " ready for " + (wizLabel || "this client") + ". Press Next to link them." : method === "db" ? "Tick the tables you want and press Extract now. This button turns on when they are in." : "Add files, and this button turns on when they are in."} />
+              )}
             </div>
 
-            {tab === "upload" && (<>
+            {tab === "upload" && (<div className={srcVisible ? "space-y-5" : "hidden"}>
             <div data-testid="onb-toolbar" className="flex flex-wrap items-center gap-3">
               <button onClick={() => setItems([])} disabled={items.length === 0} data-testid="clear-list" title="Empty this list (nothing is deleted; running jobs carry on and stay in History)" className="border border-[#3D3D3D] hover:border-amber-500 text-xs text-white px-3 py-2 rounded-lg disabled:opacity-40">🧹 Clear list</button>
               <button onClick={() => { goTab("bronze"); loadHistory(history.limit); }} data-testid="history-toggle" className="border border-[#3D3D3D] hover:border-amber-500 text-xs text-white px-3 py-2 rounded-lg">{history.open ? "Hide history" : "📜 History"}</button>
@@ -4774,7 +5101,11 @@
                 </div>
               );
             })}
-            </>)}
+            </div>)}
+
+            {mode === "connections" && phase === "link" && <WizLink api={apiFor(wizClient)} role={session.identity ? session.identity.role : ""} datasets={wizDs.map((d) => d.ds)} onBack={() => goPhase("tables")} onNext={() => goPhase("map")} />}
+            {mode === "connections" && phase === "map" && <WizMap api={apiFor(wizClient)} datasets={wizDs} onAsk={onAsk} onBuilt={(j) => { updJob(j); viewsChanged(); setViewsTick((n) => n + 1); }} onBack={() => goPhase("link")} onNext={() => goPhase("done")} />}
+            {mode === "connections" && phase === "done" && <WizDone client={wizClient} clientLabel={wizLabel} datasets={wizDs} onAsk={onAsk} onReports={() => onMode && onMode("dashboard")} onDatasets={() => { goTab("gold"); }} onAnother={restartWizard} onPublish={publishAll} />}
 
             {tab === "bronze" && history.open && (
               <div data-testid="job-list" className="bg-[#222222] border border-[#2D2D2D] rounded-xl p-5 shadow space-y-4">
@@ -5577,7 +5908,7 @@
                   <div className="text-xs font-mono space-y-1">
                     <div data-testid="who-role" className="text-white">{ROLE_LABELS[identity.role] || identity.role}</div>
                     <div className="side-muted truncate" title={identity.email}>{identity.email}</div>
-                    <div data-testid="who-version" className="side-muted opacity-80">Server {identity.version || "older than v35 - redeploy the backend"} · Screen v60</div>
+                    <div data-testid="who-version" className="side-muted opacity-80">Server {identity.version || "older than v35 - redeploy the backend"} · Screen v61</div>
                     <div className="flex gap-3 mt-2">
                       {identity.can_change_password !== false && <button data-testid="change-password-open" onClick={() => setShowPw(true)} className="side-muted hover-w underline">Change password</button>}
                       <button onClick={onSignOut} className="side-muted hover-w underline">Sign out</button>
@@ -5666,12 +5997,13 @@
                     onClientsChanged={refreshClients}
                     acting={acting || identity.tenant_id}
                     onViewsChanged={loadViews}
-                    onAsk={(v) => {
+                    onAsk={(v, q) => {
                       loadViews();
                       setActiveView(v);
                       setTalk(null);
                       setChatOpen(true);
-                      addMessage({ role: "assistant", text: "Now answering from the dataset **" + friendlyView(v, acting || identity.tenant_id) + "**. Ask a question, for example: How many records are there?" });
+                      if (q) setInput(q);
+                      addMessage({ role: "assistant", text: "Now answering from the dataset **" + friendlyView(v, acting || identity.tenant_id) + "**. " + (q ? "I put the question in the box: press Send." : "Ask a question, for example: How many records are there?") });
                     }}
                   />
                 )}
