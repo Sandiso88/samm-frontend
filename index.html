@@ -764,9 +764,106 @@
         const ds = plan.dataset || base.dataset;
         return newCard("rules", { ...(prev ? { id: prev.id } : {}), dataset: ds, title: friendlyDs(ds), text: base.text, plan });
       }
+      // ===== v51: people and clients, by chat. Every change is a review card; the server's own rules (roles, own account, client limits) still decide.
+      const ADMIN_ROLE_WORDS = [["report_viewer", /report[\s-]*(?:only\s+)?viewer|reports?\s+only|reader/i], ["system_admin", /system\s+admin(?:istrator)?|platform\s+admin(?:istrator)?/i], ["engineer", /data\s+engineer|engineer/i], ["analyst", /analyst/i], ["admin", /admin(?:istrator)?/i], ["viewer", /viewer|view[\s-]*only/i]];
+      const adminRoleOf = (txt) => { const t = String(txt || ""); for (const [r, re] of ADMIN_ROLE_WORDS) if (re.test(t)) return r; return ""; };
+      const ROLE_PLAIN = { report_viewer: "Report Viewer", viewer: "Viewer", analyst: "Analyst", engineer: "Data Engineer", admin: "Administrator", system_admin: "System Administrator" };
+      function parseAdminCommand(text) {
+        const t = String(text || "").trim().replace(/[.!?]+$/, "");
+        const emails = t.match(EMAIL_RE) || [];
+        const pre = "^(?:(?:please|kindly)\\s+)?(?:(?:can|could|would|will)\\s+you\\s+)?(?:(?:please|kindly)\\s+)?";
+        let m;
+        if (/^(?:(?:please|kindly)\s+)?(?:(?:can|could|would|will)\s+you\s+)?(?:(?:please|kindly)\s+)?(?:delete|remove|drop|get\s+rid\s+of)\s+(?:the\s+)?(?:user|account|person|member)\b/i.test(t) || (emails.length && new RegExp(pre + "(?:delete|remove|drop)\\s+(?:the\\s+)?(?:user\\s+|account\\s+(?:of\\s+|for\\s+)?)?" + emails[0].replace(/[.+]/g, "\\$&") + "$", "i").test(t))) return { kind: "no_delete" };
+        if (new RegExp(pre + "(?:who|which\\s+(?:people|users)|show\\s+(?:me\\s+)?(?:the\\s+)?(?:pending|open|unaccepted)|list\\s+(?:the\\s+)?(?:pending\\s+|open\\s+|all\\s+)?)", "i").test(t) && /\binvit(?:e|es|ation|ations)\b/i.test(t) && !emails.length) return { kind: "invites_list", all: /\b(?:all|every|list)\b/i.test(t) && !/\b(?:not|hasn'?t|haven'?t|yet|pending|open)\b/i.test(t) };
+        if (/^(?:(?:please|kindly)\s+)?(?:(?:can|could|would|will)\s+you\s+)?(?:(?:please|kindly)\s+)?(?:show|list|see)\s+(?:me\s+)?(?:the\s+|all\s+)?(?:pending\s+)?invit(?:e|es|ations)\b/i.test(t)) return { kind: "invites_list", all: !/pending/i.test(t) };
+        m = new RegExp(pre + "(?:re-?send|send\\s+again)\\s+(?:the\\s+|an?\\s+)?(?:invit(?:e|ation)\\s+)?(?:to\\s+|for\\s+)?(.+)$", "i").exec(t);
+        if (m && /invit/i.test(t)) return { kind: "resend", who: (emails[0] || m[1]).trim() };
+        m = new RegExp(pre + "(?:invite|add|create|onboard|set\\s+up)\\s+(?:a\\s+|an\\s+|the\\s+|new\\s+)*(?:user\\s+|person\\s+)?(" + EMAIL_RE.source + ")(?:\\s+(?:as|to\\s+be|with(?:\\s+the)?\\s+role(?:\\s+of)?|for\\s+the\\s+role\\s+of|with)\\s+(?:a\\s+|an\\s+|the\\s+)?(.+))?$", "i").exec(t);
+        if (m) return { kind: "invite", email: m[1].toLowerCase(), role: adminRoleOf(m[2] || "") , said: m[2] || "" };
+        m = new RegExp(pre + "(?:invite|add|create|onboard)\\s+(?:a\\s+|an\\s+)?(?:new\\s+)?(?:client|customer)\\s+(?:called|named)\\s+[\"“']?(.{2,60}?)[\"”']?$", "i").exec(t);
+        if (m && !emails.length) return { kind: "client_add", name: m[1].trim() };
+        m = new RegExp(pre + "(?:reset|change)\\s+(?:the\\s+)?password\\s+(?:for|of)\\s+(.+)$", "i").exec(t) || new RegExp(pre + "reset\\s+(.+?)['’]s\\s+password$", "i").exec(t);
+        if (m) return { kind: "reset", who: (emails[0] || m[1]).trim() };
+        m = new RegExp(pre + "(?:switch\\s+off|turn\\s+off|disable|deactivate|suspend|block|lock(?:\\s+out)?)\\s+(?:the\\s+(?:account|access)\\s+(?:of|for)\\s+)?(.+)$", "i").exec(t);
+        if (m && !/\btile\b/i.test(t)) return { kind: "status", status: "disabled", who: (emails[0] || m[1]).trim() };
+        m = new RegExp(pre + "(?:switch\\s+on|turn\\s+on|enable|reactivate|re-?enable|unblock|unlock|restore)\\s+(?:the\\s+(?:account|access)\\s+(?:of|for)\\s+)?(.+)$", "i").exec(t);
+        if (m && !/\btile\b/i.test(t)) return { kind: "status", status: "active", who: (emails[0] || m[1]).trim() };
+        m = new RegExp(pre + "(?:make|change|set|update|promote|demote|move)\\s+(?:the\\s+role\\s+(?:of\\s+)?)?(.+?)(?:['’]s\\s+role)?\\s+(?:to\\s+(?:be\\s+)?|into\\s+|as\\s+)?(?:a\\s+|an\\s+|the\\s+)?(report[\\s-]*viewer|system\\s+admin(?:istrator)?|platform\\s+admin(?:istrator)?|data\\s+engineer|engineer|analyst|administrator|admin|viewer)$", "i").exec(t);
+        if (m && !/\b(?:tile|report|dashboard|rule|column)\b/i.test(m[1])) return { kind: "role", who: (emails[0] || m[1]).trim(), role: adminRoleOf(m[2]) };
+        return null;
+      }
+      async function adminFindUsers(who, ctx) {
+        const r = await ctx.api({ action: "users" });
+        const rows = r.users || [];
+        const w = String(who || "").toLowerCase().replace(/^(?:the\s+)?(?:user\s+|account\s+(?:of\s+|for\s+)?)/, "").trim();
+        if (!w) return { rows: [], hits: [] };
+        const em = w.match(EMAIL_RE);
+        if (em) return { rows, hits: rows.filter((u) => String(u.email).toLowerCase() === em[0].toLowerCase()) };
+        const toks = w.split(/[\s._-]+/).filter((x) => x.length > 1);
+        return { rows, hits: rows.filter((u) => { const e = String(u.email).toLowerCase(); return e === w || (toks.length && toks.every((x) => e.includes(x))); }) };
+      }
+      async function adminPlan(ad, ctx) {
+        const NOPE = "Managing people is for Administrators. Ask yours to do this, or ask me something about the data instead.";
+        if (ad.kind === "no_delete") return { text: ctx.isAdmin ? "I do not delete people from the chat. I can **switch someone off** (say: switch off jane@company.com), which ends their access at once and can be undone. Deleting is done on the Authorizations screen." : NOPE };
+        if (!ctx.isAdmin) return (["status", "role"].includes(ad.kind) && !/@|\buser\b/i.test(ad.who)) ? null : { text: NOPE };
+        const who = (u) => u.email + " (" + (ROLE_PLAIN[u.role] || u.role) + (ctx.isSys && u.tenant_id ? ", " + u.tenant_id : "") + (u.status === "disabled" ? ", switched off" : "") + ")";
+        if (ad.kind === "client_add") {
+          if (!ctx.isSys) return { text: "Adding a client is for platform administrators." };
+          return { text: "I will add this client. Press **Keep** to confirm.", card: newCard("admin", { op: "client_add", heading: "Add a client", facts: ["Name: " + ad.name], call: { action: "client_add", name: ad.name }, keepLabel: "Add the client" }) };
+        }
+        if (ad.kind === "invites_list") {
+          const r = await ctx.api({ action: "invite_list", ...(ctx.isSys && ctx.client ? { tenant_id: ctx.client } : {}) });
+          const all = r.invites || [];
+          const open = all.filter((i) => ["sent", "pending", "failed", "expired"].includes(String(i.state || i.status || "").toLowerCase()));
+          const pick = ad.all ? all : open;
+          if (!pick.length) return { text: ad.all ? "There are no invitations yet." : "Everyone invited has accepted. Nothing is waiting." };
+          return { text: (ad.all ? "Invitations" : "Invitations not accepted yet") + " (" + pick.length + "):\n\n" + pick.slice(0, 15).map((i) => "- " + i.email + " · " + (ROLE_PLAIN[i.role] || i.role) + " · " + (i.state || i.status || "") ).join("\n") + (pick.length > 15 ? "\n- and " + (pick.length - 15) + " more (see Authorizations)" : "") + "\n\nSay, for example: resend the invite to " + pick[0].email + ".", chips: pick.slice(0, 3).filter((i) => ["sent", "pending", "failed", "expired"].includes(String(i.state || i.status || "").toLowerCase())).map((i) => ({ label: "Resend to " + i.email, send: "resend the invite to " + i.email })) };
+        }
+        if (ad.kind === "invite") {
+          if (!ad.role) return { text: "Which role should " + ad.email + " have?", chips: ["viewer", "analyst", "engineer", "admin", "report viewer"].filter((r) => ctx.isSys || r !== "system admin").map((r) => ({ label: r === "engineer" ? "Data Engineer" : r.charAt(0).toUpperCase() + r.slice(1), send: "invite " + ad.email + " as " + (r === "engineer" ? "an engineer" : "a " + r) })) };
+          if (ad.role === "system_admin" && !ctx.isSys) return { text: "Only a platform administrator can make a System Administrator." };
+          return { text: "Here is the invitation. **Nothing is sent yet.** Press **Keep** to send it.", card: newCard("admin", { op: "invite", heading: "Invite a person", facts: ["Person: " + ad.email, "Role: " + ROLE_PLAIN[ad.role], "Client: " + (ctx.clientName || ctx.client || "your client"), "They get an e-mail with a link to set up their sign-in."], call: { action: "invite_send", email: ad.email, role: ad.role, ...(ctx.isSys && ctx.client ? { tenant_id: ctx.client } : {}) }, keepLabel: "Send the invitation", who: ad.email }) };
+        }
+        if (ad.kind === "resend") {
+          const r = await ctx.api({ action: "invite_list", ...(ctx.isSys && ctx.client ? { tenant_id: ctx.client } : {}) });
+          const w = String(ad.who).toLowerCase(); const em = w.match(EMAIL_RE);
+          const hits = (r.invites || []).filter((i) => em ? String(i.email).toLowerCase() === em[0].toLowerCase() : String(i.email).toLowerCase().includes(w.replace(/[^a-z0-9._-]+/g, "")));
+          if (!hits.length) return { text: "I could not find an invitation for \"" + ad.who + "\". Say the e-mail address, or ask: who has not accepted their invite?" };
+          const emails = Array.from(new Set(hits.map((i) => i.email)));
+          if (emails.length > 1) return { text: "More than one person fits \"" + ad.who + "\". Which one?", chips: emails.slice(0, 5).map((e) => ({ label: e, send: "resend the invite to " + e })) };
+          const inv = hits.slice().sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))[0];
+          return { text: "I will send a new invitation. The old link stops working. Press **Keep** to confirm.", card: newCard("admin", { op: "resend", heading: "Send the invitation again", facts: ["Person: " + inv.email, "Role: " + (ROLE_PLAIN[inv.role] || inv.role), "The earlier link stops working."], call: { action: "invite_resend", id: inv.id, ...(ctx.isSys && ctx.client ? { tenant_id: ctx.client } : {}) }, keepLabel: "Send again", who: inv.email }) };
+        }
+        // the rest act on a person who already exists
+        const f = await adminFindUsers(ad.who, ctx);
+        if (!f.hits.length) return ad.kind === "status" || ad.kind === "role" ? null : { text: "I could not find a user called \"" + ad.who + "\". Say their e-mail address." };
+        if (f.hits.length > 1) return { text: "More than one person fits \"" + ad.who + "\". Which one?", chips: f.hits.slice(0, 5).map((u) => ({ label: u.email, send: ad.kind === "role" ? "make " + u.email + " " + (ad.role === "engineer" ? "an engineer" : "a " + ad.role.replace("_", " ")) : ad.kind === "status" ? (ad.status === "disabled" ? "switch off " : "switch on ") + u.email : "reset the password for " + u.email })) };
+        const u = f.hits[0];
+        const me = String(ctx.me || "").toLowerCase();
+        if (String(u.email).toLowerCase() === me && ad.kind !== "reset") return { text: "I cannot change your own role or switch yourself off. Ask another administrator." };
+        if (ad.kind === "role") {
+          if (!ad.role) return { text: "Which role? For example: make " + u.email + " an analyst." };
+          if (ad.role === "system_admin" && !ctx.isSys) return { text: "Only a platform administrator can make a System Administrator." };
+          if (u.role === ad.role) return { text: who(u) + " already has that role. Nothing to change." };
+          if (u.role === "system_admin" && !ctx.isSys) return { text: "Only a platform administrator can change a System Administrator." };
+          const down = ["report_viewer", "viewer", "analyst", "engineer", "admin", "system_admin"].indexOf(ad.role) < ["report_viewer", "viewer", "analyst", "engineer", "admin", "system_admin"].indexOf(u.role);
+          return { text: "Here is the change. **Nothing has changed yet.** Press **Keep** to apply it.", card: newCard("admin", { op: "role", heading: "Change a role", facts: ["Person: " + u.email, "Now: " + (ROLE_PLAIN[u.role] || u.role), "Change to: " + ROLE_PLAIN[ad.role], "Client: " + (u.tenant_id || ctx.client), "They are told by e-mail that their role changed."], warn: down ? "This takes away some of what they can do." : "", call: { action: "user_save", email: u.email, role: ad.role, tenant_id: u.tenant_id }, keepLabel: "Change the role", who: u.email, roleTo: ad.role }) };
+        }
+        if (ad.kind === "status") {
+          if ((u.status || "active") === ad.status) return { text: who(u) + (ad.status === "disabled" ? " is already switched off." : " is already switched on.") };
+          const off = ad.status === "disabled";
+          return { text: off ? "Here is the change. They lose access at once; you can switch them back on. Press **Keep** to confirm." : "I will switch them back on. Press **Keep** to confirm.", card: newCard("admin", { op: "status", heading: off ? "Switch a person off" : "Switch a person on", facts: ["Person: " + u.email, "Role: " + (ROLE_PLAIN[u.role] || u.role), "Client: " + (u.tenant_id || ctx.client)], warn: off ? "They will not be able to sign in until you switch them back on." : "", call: { action: "user_save", email: u.email, role: u.role, tenant_id: u.tenant_id, status: ad.status }, keepLabel: off ? "Switch off" : "Switch on", who: u.email, statusTo: ad.status }) };
+        }
+        if (ad.kind === "reset") {
+          return { text: "I will reset this password. Press **Keep** to confirm.", card: newCard("admin", { op: "reset", heading: "Reset a password", facts: ["Person: " + u.email, "Client: " + (u.tenant_id || ctx.client), "They sign in with the starting password and must choose their own."], warn: "Their current sign-in ends at once.", call: { action: "password_reset", email: u.email }, keepLabel: "Reset the password", who: u.email }) };
+        }
+        return null;
+      }
       async function assistPlan(text, ctx) {
         const bc = parseBuildCommand(text);
         const ac = parseAssistCommand(text);
+        // ---- people and clients (Administrators)
+        { const ad = parseAdminCommand(text); if (ad && !(bc && bc.kind === "rule")) { const r = await adminPlan(ad, ctx); if (r) return r; } }
         // ---- rules (Data Engineers)
         if (bc && bc.kind === "rule") {
           if (!ctx.canFix) return { text: "Changing a dataset's data rules is for Data Engineers. Ask yours to add this rule, or ask me a question about the data instead." };
@@ -830,6 +927,16 @@
         return { text: String(d.report_markdown || "I could not answer that.").replace(/[#*_`>]/g, ""), chips: (d.suggestions || []).slice(0, 3).map((c) => ({ label: c, send: c })) };
       }
       async function assistAct(card, action, arg, ctx) {
+        if (card.kind === "admin" && action === "keep") {
+          const r = await ctx.api(card.call);
+          let done = "";
+          if (card.op === "invite" || card.op === "resend") done = r.sent ? "Invitation sent to " + card.who + "." : "The invitation for " + card.who + " was created, but the e-mail was not sent" + (r.error ? " (" + r.error + ")" : "") + ". You can send it again from Authorizations.";
+          else if (card.op === "role") done = card.who + " is now " + (/^[AEIOU]/.test(ROLE_PLAIN[card.roleTo] || "") ? "an " : "a ") + (ROLE_PLAIN[card.roleTo] || card.roleTo) + ".";
+          else if (card.op === "status") done = card.who + (card.statusTo === "disabled" ? " is switched off." : " is switched on.");
+          else if (card.op === "reset") done = (r.note || "The password was reset.") + (r.starting_password ? " Starting password: " + r.starting_password : "");
+          else if (card.op === "client_add") done = "Added " + (r.name || "the client") + ". Choose it in the Client box to add data for it.";
+          return { card: { ...card, status: "done", doneText: done }, text: done };
+        }
         if (card.kind === "dashboard") {
           if (action === "toggle") return { card: { ...card, tiles: card.tiles.map((t) => t.id === arg ? { ...t, keep: !t.keep } : t) } };
           if (action === "ask") {                       // a tile needed a choice: ask the chosen question and add it to the review
@@ -952,6 +1059,9 @@
           footer = !done && <div className="flex gap-2">{card.plan.lines.length > 0 && card.plan.can_apply !== false && <button data-testid="chat-rule-apply" disabled={busy} onClick={() => onAct(card, "keep")} className="border border-[#8ef4b2] text-[#8ef4b2] text-xs px-3 py-1.5 rounded-lg disabled:opacity-50">Apply {card.plan.lines.length} rule(s)</button>}{discardBtn}</div>;
         } else if (card.kind === "open_report") {
           body = <div className="space-y-2">{card.matches.map((m) => <div key={m.id} data-testid="card-report" className="flex items-center gap-2 border border-[#2c385d] rounded-xl p-2 bg-white/5"><div className="min-w-0"><div className="text-xs font-semibold text-white truncate">{m.title}</div><div className="text-[10px] text-[#78869b]">{m.tiles} tile(s)</div></div><button data-testid="card-open" onClick={() => onAct(card, "open", m.id)} className="ml-auto border border-[#8ef4b2] text-[#8ef4b2] text-xs px-3 py-1 rounded-lg">Open</button></div>)}</div>;
+        } else if (card.kind === "admin") {
+          body = <div className="text-xs text-[#D0D0D0] space-y-1"><div className="text-white font-semibold">{card.heading}</div>{card.facts.map((f, i) => <div key={i} data-testid="card-fact">{f}</div>)}{card.warn && <div data-testid="card-warn" className="text-amber-200">{card.warn}</div>}</div>;
+          footer = !done && <div className="flex gap-2">{keepBtn(card.keepLabel || "Keep", false)}{discardBtn}</div>;
         } else if (card.kind === "tile_edit") {
           body = <div className="text-xs text-[#D0D0D0]">{card.op === "remove" ? <>Remove the tile <b>{card.tile.title}</b>.</> : <>Rename <b>{card.tile.title}</b> to <b>{card.to}</b>.</>}</div>;
           footer = !done && <div className="flex gap-2">{keepBtn("Keep", false)}{discardBtn}</div>;
@@ -993,117 +1103,6 @@
           useEffect(() => { const f = () => setW(window.innerWidth >= min); window.addEventListener("resize", f); return () => window.removeEventListener("resize", f); }, [min]);
           return w;
         }
-        function AssistantDrawer({ api, role, client, tiles, setTiles, activeView, defaultView, onClose, reportsChanged, onOpenReport, slot }) {
-        const [msgs, setMsgs] = useState([{ id: "w", role: "assistant", text: "Tell me what you want on this page. For example: build me a dashboard of total rent by site, give me the landsec report, combine the property table and the weekly tasks report, publish this to Power BI and email it to anna@company.com." }]);
-        const [input, setInput] = useState("");
-        const [busy, setBusy] = useState(false);
-        const endRef = useRef(null);
-        useEffect(() => { if (endRef.current && endRef.current.scrollIntoView) endRef.current.scrollIntoView({ block: "end" }); }, [msgs.length, busy]);
-        const wide = useWide(1024);
-        // v50: the whole page (sidebar, top bar and content) shrinks to sit beside the chat, like a docked panel.
-        useEffect(() => {
-          const st = document.createElement("style"); st.setAttribute("data-samm-dock", "");
-          st.textContent = wide ? "body{padding-right:440px!important;box-sizing:border-box}" : "body{padding-bottom:50vh!important;box-sizing:border-box} #root > div{height:50vh!important}";
-          document.head.appendChild(st); return () => { st.remove(); };
-        }, [wide]);
-        const pendingCards = msgs.filter((m) => m.card && m.card.status !== "done").length;
-        useEffect(() => { if (slot && pendingCards && slot.scrollIntoView) slot.scrollIntoView({ block: "nearest", behavior: "smooth" }); }, [pendingCards]);
-        const ctx = { api, canFix: CAN_ONBOARD.includes(role), canPublish: ["analyst", "engineer", "admin", "system_admin"].includes(role), tiles, setTiles, activeView, defaultView, client, reportsChanged, openReport: onOpenReport, mode: "reports" };
-        const add = (m) => setMsgs((p) => [...p, { id: "m" + Date.now() + Math.random(), ...m }]);
-        const send = async (text) => {
-          const t = String(text || input).trim(); if (!t || busy) return;
-          setInput(""); add({ role: "user", text: t }); setBusy(true);
-          try {
-            const r = (await assistPlan(t, ctx)) || (await assistAsk(t, ctx));
-            add({ role: "assistant", text: r.text, card: r.card, chips: r.chips });
-          } catch (e) { add({ role: "assistant", text: (e && e.message) || "That did not work.", err: true }); } finally { setBusy(false); }
-        };
-        const act = async (card, action, arg) => {
-          setBusy(true);
-          try {
-            const r = await assistAct(card, action, arg, ctx);
-            setMsgs((p) => p.map((m) => m.card && m.card.id === card.id ? { ...m, card: r.card } : m));
-            if (r.text && action === "keep") add({ role: "assistant", text: r.text });
-          } catch (e) { setMsgs((p) => p.map((m) => m.card && m.card.id === card.id ? { ...m, card: { ...m.card, error: (e && e.message) || "That did not work." } } : m)); } finally { setBusy(false); }
-        };
-        const discard = (card) => setMsgs((p) => p.map((m) => m.card && m.card.id === card.id ? { ...m, card: null, text: (m.text || "") + " (Discarded.)" } : m));
-        return (
-          <aside data-testid="assistant-drawer" data-dock={wide ? "right" : "bottom"} style={wide ? { position: "fixed", top: 0, right: 0, bottom: 0, width: 440, zIndex: 40 } : { position: "fixed", left: 0, right: 0, bottom: 0, height: "50vh", zIndex: 40 }} className={"flex flex-col bg-[#10193a] border-[#2c385d] " + (wide ? "border-l" : "border-t")}>
-            <div className="h-14 px-4 flex items-center justify-between border-b border-[#2c385d]">
-              <div><div className="text-sm font-bold text-white">Chat with SAMM</div><div className="text-[10px] text-[#8ef4b2] font-mono">Reports{client ? " · " + client : ""}</div></div>
-              <button data-testid="assistant-close" onClick={onClose} aria-label="Close chat" className="border border-[#3D3D3D] hover:border-amber-500 text-white text-xs px-2 py-1 rounded">Close ✕</button>
-            </div>
-            <div className="flex-1 overflow-y-auto p-3 space-y-3">
-              {msgs.map((m) => (
-                <div key={m.id} className={m.role === "user" ? "flex justify-end" : ""}>
-                  <div data-testid={"drawer-" + m.role} className={"max-w-full rounded-xl px-3 py-2 text-xs " + (m.role === "user" ? "bg-blue-600 text-white" : "bg-white/5 border border-[#2c385d] text-[#E3E3E3]") + (m.err ? " border-red-400/60" : "")}>
-                    {m.role === "user" ? m.text : <Markdown text={m.text || ""} />}
-                    {m.card && m.card.status === "done" && <ReviewCard card={m.card} busy={busy} onAct={act} onDiscard={discard} />}
-                    {m.card && m.card.status !== "done" && (slot
-                      ? <div data-testid="drawer-review-note" className="mt-2 text-[11px] text-[#8ef4b2]">It is in the middle of the page for you to review. Press Keep there, or Discard.</div>
-                      : <ReviewCard card={m.card} busy={busy} onAct={act} onDiscard={discard} />)}
-                    {m.chips && m.chips.length > 0 && m === msgs[msgs.length - 1] && <div className="flex flex-wrap gap-2 mt-2">{m.chips.map((c) => <button key={c.label} data-testid="drawer-chip" disabled={busy} onClick={() => send(c.send)} className="text-xs border border-[#3D3D3D] hover:border-amber-500 text-[#D0D0D0] px-3 py-1 rounded-full disabled:opacity-50">{c.label}</button>)}</div>}
-                  </div>
-                </div>
-              ))}
-              {busy && <div className="text-[11px] text-[#78869b] animate-pulse">Working...</div>}
-              <div ref={endRef} />
-            </div>
-            {slot && ReactDOM.createPortal(
-              <>{msgs.filter((m) => m.card && m.card.status !== "done").map((m) => (
-                <section key={m.card.id} data-testid="review-mid-card" className="rounded-2xl border border-[#8ef4b2]/40 bg-[#10193a] p-3">
-                  <ReviewCard card={m.card} busy={busy} onAct={act} onDiscard={discard} />
-                </section>))}</>, slot)}
-            <form onSubmit={(e) => { e.preventDefault(); send(); }} className="p-3 border-t border-[#2c385d] flex gap-2">
-              <input aria-label="Message SAMM" data-testid="drawer-input" value={input} onChange={(e) => setInput(e.target.value)} disabled={busy} placeholder="Describe what you want..." className="flex-1 bg-[#2D2D2D] border border-[#3D3D3D] rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-amber-500 disabled:opacity-50" />
-              <button type="submit" data-testid="drawer-send" disabled={busy || !input.trim()} className="bg-blue-600 hover:bg-blue-500 text-white text-sm px-3 rounded-lg disabled:opacity-50">Send</button>
-            </form>
-          </aside>
-        );
-      }
-      function SplitChat({ messages, since, isLoading, input, setInput, onSend, onClose, label, reportId, onAdd, onOpenArtifact }) {
-        const [added, setAdded] = useState({});
-        const [err, setErr] = useState("");
-        const endRef = useRef(null);
-        useEffect(() => { if (endRef.current && endRef.current.scrollIntoView) endRef.current.scrollIntoView({ block: "end" }); }, [messages.length, isLoading]);
-        const shown = messages.slice(Math.max(since - 1, 0));
-        const add = async (m) => {
-          setErr("");
-          try { await onAdd(m); setAdded((a) => ({ ...a, [m.id]: true })); } catch (e) { setErr((e && e.message) || "Could not add that to the report."); }
-        };
-        return (
-          <aside data-testid="split-chat" className="fixed md:static inset-y-0 right-0 z-40 w-full sm:w-[420px] md:w-[400px] shrink-0 flex flex-col bg-[#1A1A1A] border-l border-[#2D2D2D] shadow-2xl">
-            <div className="h-14 px-4 flex items-center justify-between border-b border-[#2D2D2D]">
-              <div className="min-w-0"><div className="text-sm font-bold text-white">Ask SAMM</div><div className="text-[10px] text-amber-500 font-mono truncate" data-testid="split-scope">About: {label}</div></div>
-              <button data-testid="split-close" onClick={onClose} aria-label="Close chat panel" className="border border-[#3D3D3D] hover:border-amber-500 text-white text-xs px-2 py-1 rounded">Close ✕</button>
-            </div>
-            <div className="flex-1 overflow-y-auto p-3 space-y-3">
-              {shown.length === 0 && <div className="text-xs text-[#A0A0A0]">Ask a question about this data. The table on the left shows what you asked for.</div>}
-              {shown.map((m) => (
-                <div key={m.id} data-testid="split-msg" className={"rounded-lg p-3 text-sm " + (m.role === "user" ? "bg-amber-600 text-white ml-8" : "bg-[#222222] border border-[#2D2D2D] mr-2")}>
-                  {m.error ? <div className="text-red-300 text-xs">{m.error.message}</div> : <MessageBody msg={m} onOpenArtifact={onOpenArtifact} />}
-                  {m.role === "assistant" && !m.error && Array.isArray(m.rows) && m.rows.length > 0 && (
-                    <>
-                      <ResultTable rows={m.rows} />
-                      {reportId && (
-                        <button data-testid="add-to-report" disabled={!!added[m.id]} onClick={() => add(m)} className="mt-2 text-xs border border-[#8ef4b2]/60 text-[#8ef4b2] hover:bg-[#8ef4b2]/10 px-2 py-1 rounded disabled:opacity-60">{added[m.id] ? "Added to report ✓" : "Add to report"}</button>
-                      )}
-                    </>
-                  )}
-                </div>
-              ))}
-              {isLoading && <div className="text-xs font-mono text-[#A0A0A0] animate-pulse">SAMM is working...</div>}
-              {err && <div className="text-[11px] text-amber-200">{err}</div>}
-              <div ref={endRef} />
-            </div>
-            <form onSubmit={(e) => { e.preventDefault(); onSend(input.trim()); }} className="border-t border-[#2D2D2D] p-3 flex gap-2">
-              <input aria-label="Ask a question" data-testid="split-input" value={input} onChange={(e) => setInput(e.target.value)} disabled={isLoading} placeholder={reportId ? "Ask, or: make the report blue" : "Ask about this data..."} className="flex-1 bg-[#2D2D2D] border border-[#3D3D3D] rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-amber-500 disabled:opacity-50" />
-              <button type="submit" disabled={isLoading || !input.trim()} className="bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-bold text-sm px-4 rounded-lg">Send</button>
-            </form>
-          </aside>
-        );
-      }
-
       function ReportView({ doc, api, client, onBack, onChanged, onAsk, canManage, viewerOnly }) {
         const [delAsk, setDelAsk] = useState(false);
         const [cur, setCur] = useState(doc);
@@ -1200,49 +1199,6 @@
         );
       }
 
-      function VibeDashboard({ api, onAddTiles }) {
-        const [text, setText] = useState("");
-        const [busy, setBusy] = useState(false);
-        const [lines, setLines] = useState([]);
-        const [note, setNote] = useState("");
-        const go = async () => {
-          setBusy(true); setLines([]); setNote("");
-          try {
-            const plan = await api({ action: "vibe_dashboard_plan", text });
-            if (!plan.items.length) { setNote(plan.note || "I could not find anything to ask. Try: total contract value by site, top 5 tenants by rent."); return; }
-            const stamp = new Date().toISOString().slice(0, 16).replace("T", " ");
-            const results = new Array(plan.items.length);
-            let done = 0;
-            setNote("Asking SAMM 0 of " + plan.items.length + "...");
-            const one = async (it, i) => {
-              try {
-                const d = await api({ action: "query", prompt: it.question });
-                if (Array.isArray(d.raw_data_grid) && d.raw_data_grid.length > 0) results[i] = { ok: true, title: it.title, tile: { id: "t" + Date.now() + "_" + i, title: it.title, rows: d.raw_data_grid.slice(0, 60), at: stamp } };
-                else results[i] = { ok: false, text: it.title + ": SAMM had no table to show for this." + (d && d.report_markdown ? " It said: " + String(d.report_markdown).replace(/[#*_`>]/g, "").replace(/\s+/g, " ").trim().slice(0, 140) : " Try rewording it.") };
-              } catch (e) { results[i] = { ok: false, text: it.title + ": " + (e && e.message ? e.message : "could not be answered") }; }
-              done += 1; setNote("Asking SAMM " + done + " of " + plan.items.length + "...");
-            };
-            for (let i = 0; i < plan.items.length; i += 3) await Promise.all(plan.items.slice(i, i + 3).map((it, j) => one(it, i + j)));
-            const made = results.filter((r) => r && r.ok).map((r) => r.tile);
-            const out = results.map((r) => r.ok ? { ok: true, text: r.title } : r);
-            (plan.skipped || []).forEach((k) => out.push({ ok: false, text: k.text + ": " + k.why }));
-            if (made.length) onAddTiles(made);
-            setLines(out);
-            setNote(made.length ? made.length + " tile(s) added below. You can remove any tile, or describe more." : "No tile could be built.");
-          } catch (e) { setNote(e && e.message ? e.message : "Could not build the dashboard."); } finally { setBusy(false); }
-        };
-        return (
-          <div data-testid="vibe-dashboard" className="bg-white/5 border border-[#2c385d] rounded-2xl p-4 space-y-2">
-            <div className="text-sm font-bold text-white">Describe a dashboard</div>
-            <div className="text-[11px] text-[#b8c2d6]">Say what you want to see, in your own words, separated by commas or new lines. Each part is asked as a normal question, so you only see what your role allows.</div>
-            <textarea aria-label="Describe the dashboard" data-testid="vibe-dash-text" rows={3} value={text} onChange={(e) => setText(e.target.value)} placeholder="total contract value by site, monthly trend of rent, top 5 tenants by rent" className="w-full bg-[#2D2D2D] border border-[#3D3D3D] rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-amber-500" />
-            <button data-testid="vibe-dash-go" disabled={busy || !text.trim()} onClick={go} className="border border-[#3D3D3D] hover:border-[#8ef4b2] text-white text-xs px-3 py-1 rounded-md disabled:opacity-50">{busy ? "Building..." : "Build dashboard"}</button>
-            {note && <div data-testid="vibe-dash-note" className="text-[11px] text-emerald-300">{note}</div>}
-            {lines.map((l, i) => <div key={i} data-testid="vibe-dash-line" className={"text-[11px] " + (l.ok ? "text-[#b8c2d6]" : "text-amber-200")}>{l.ok ? "Added: " : "Skipped: "}{l.text}</div>)}
-          </div>
-        );
-      }
-
       function VibeData({ api }) {
         const [list, setList] = useState(null);
         const [ds, setDs] = useState("");
@@ -1291,8 +1247,6 @@
         const [pubMsg, setPubMsg] = useState("");
         const [pbiLink, setPbiLink] = useState("");
         const [pbi, setPbi] = useState(null);
-        const [assistOpen, setAssistOpen] = useState(false);
-        const [midEl, setMidEl] = useState(null);       // v49: where review cards are shown, in the middle of the page
         const [sis, setSis] = useState(null);
         const [pbiOut, setPbiOut] = useState(null);
         const [shareTo, setShareTo] = useState("");
@@ -1364,16 +1318,13 @@
         if (viewing) return <ReportView viewerOnly={viewerOnly} canManage={canManage} doc={viewing} api={api} client={client} onBack={() => { setViewing(null); loadReports(); }} onChanged={loadReports} onAsk={(ds) => onAsk && onAsk("Describe the dataset " + String(ds).replace(/^silver_/, ""))} />;
         return (
           <div data-testid="hub-wrap">
-          {assistOpen && !viewerOnly && api && setTiles && <AssistantDrawer slot={midEl} api={api} role={role} client={client} tiles={tiles} setTiles={setTiles} activeView={activeView} defaultView={defaultView} onClose={() => setAssistOpen(false)} reportsChanged={loadReports} onOpenReport={(id) => openReport(id)} />}
           <div data-testid="dashboard" className="max-w-5xl mx-auto space-y-4 rounded-3xl p-6 border border-[#2c385d]" style={{ background: "radial-gradient(900px 380px at 75% -10%, #1d3a6b 0%, transparent 60%), linear-gradient(180deg,#13214a,#0f1c3f)" }}>
             <div className="flex items-center justify-between gap-3 flex-wrap">
               <img src={DATORE_LOGO} alt="datore" className="h-8" data-testid="dt-logo" />
               <div className="flex items-center gap-3">
                 <span className="text-[11px] text-[#78869b]">{client ? "Client: " + client : ""}</span>
-                {!viewerOnly && api && setTiles && <button data-testid="open-assistant" onClick={() => setAssistOpen((o) => !o)} className="border border-[#8ef4b2] text-[#8ef4b2] hover:bg-[#8ef4b2]/10 text-xs px-3 py-1.5 rounded-lg">{assistOpen ? "Close chat" : "Chat with SAMM"}</button>}
               </div>
             </div>
-            {assistOpen && !viewerOnly && <div ref={setMidEl} data-testid="review-mid" className="space-y-3 empty:hidden" />}
             <div>
               <h2 data-testid="dt-headline" className="text-3xl md:text-4xl font-extrabold text-white tracking-tight">Every number. <span className="text-[#8ef4b2]">One place.</span></h2>
               <p className="text-xs text-[#b8c2d6] mt-2">Pin any chart from the chat. Tiles are saved in this browser. Refresh re-asks the question, so the numbers are always live and follow your role's limits.</p>
@@ -1388,7 +1339,6 @@
                 ))}
               </div>
             )}
-            {!viewerOnly && api && onAddTiles && <VibeDashboard api={api} onAddTiles={onAddTiles} />}
             {tiles.length > 0 && (
               <div data-testid="publish-panel" className="bg-white/5 border border-[#2c385d] rounded-2xl p-4 space-y-2">
                 <div className="text-sm font-bold text-white">Publish this report{client ? " for " + client : ""}</div>
@@ -1449,7 +1399,7 @@
                 </div>
               ))}
             </div>
-            {tiles.length === 0 && !viewerOnly && <div className="bg-white/5 border border-[#2c385d] rounded-2xl p-6 text-sm text-[#b8c2d6]">Nothing pinned yet. Ask a question in the chat, then choose <b>Pin to dashboard</b> under its chart.</div>}
+            {tiles.length === 0 && !viewerOnly && <div className="bg-white/5 border border-[#2c385d] rounded-2xl p-6 text-sm text-[#b8c2d6]">Nothing pinned yet. Open <b>Chat with SAMM</b> and say what you want, for example: build me a dashboard of total rent by site.</div>}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               {tiles.map((t) => (
                 <div key={t.id} data-testid="tile" className="bg-white/5 border border-[#2c385d] rounded-2xl p-4">
@@ -3915,7 +3865,7 @@
           ["connections", "Connections", facts.conns, "Files and databases data comes in from", canOnboard, "connections"],
           ["s3", "S3 bucket", null, "Every file stored for this client", canOnboard, "s3"],
           ["reports", "Reports", tiles.length, "Pinned and published reports", true, "dashboard"],
-          ["chat", "Ask SAMM", null, "Ask a question in plain words", role !== "report_viewer", "chat"],
+          ["chat", "Chat with SAMM", null, "Ask, build reports and manage, in plain words", role !== "report_viewer", "chat"],
         ].filter((c) => c[4]);
         return (
           <div className="max-w-5xl mx-auto space-y-6" data-testid="overview-hub">
@@ -4838,7 +4788,7 @@
 
         const [input, setInput] = useState("");
         const [persona, setPersona] = useState("architect");
-        const [activeTab, setActiveTab] = useState(() => { let h = ""; try { h = String(window.location.hash || "").replace("#", ""); } catch (_) { /* optional */ } if (role === "report_viewer") return "dashboard"; return ["overview", "chat", "dashboard", "connections", "s3", "datasets", "governance"].includes(h) ? h : "overview"; });
+        const [activeTab, setActiveTab] = useState(() => { let h = ""; try { h = String(window.location.hash || "").replace("#", ""); } catch (_) { /* optional */ } if (role === "report_viewer") return "dashboard"; return ["overview", "dashboard", "connections", "s3", "datasets", "governance"].includes(h) ? h : "overview"; });
         const [isLoading, setIsLoading] = useState(false);
 
         const [s3Path, setS3Path] = useState("s3://shiftleft-superposition-ingest-vault/CS.json");
@@ -4918,7 +4868,7 @@
         const canGold = CAN_GOLD.includes(role);
         useEffect(() => {
           if ((activeTab === "connections" || activeTab === "s3" || activeTab === "datasets") && !canOnboard) setActiveTab("overview");
-          if (activeTab === "governance" && !canGovern) setActiveTab("chat");
+          if (activeTab === "governance" && !canGovern) setActiveTab("overview");
         }, [role]);
 
         const addMessage = (m) => setMessages((prev) => [...prev, { id: "m" + ++nextId.current, timestamp: stamp(), ...m }]);
@@ -4969,7 +4919,6 @@
           window.addEventListener("samm-report-opened", opened);
           return () => { window.removeEventListener("samm-split-ask", ask); window.removeEventListener("samm-report-opened", opened); };
         }, [views]);
-        useEffect(() => { if (activeTab === "chat" && split) setSplit(null); }, [activeTab]);
         const live = (() => {
           if (!split) return null;
           for (let i = messages.length - 1; i >= split.since; i--) {
@@ -5002,9 +4951,25 @@
         const CAN_FIX = CAN_ONBOARD.includes(role);
         const [reviewCard, setReviewCard] = useState(null);       // v48: the card shown in the review panel on Ask SAMM
         const [reviewBusy, setReviewBusy] = useState(false);
+        // v51: ONE chat panel for every tab. It docks on the right; the page, sidebar and top bar fit beside it.
+        const [chatOpen, setChatOpen] = useState(() => { try { return String(window.location.hash || "") === "#chat"; } catch (_) { return false; } });
+        const [midEl, setMidEl] = useState(null);                 // where review cards appear: the middle of the page
+        const [added, setAdded] = useState({});
+        const [panelErr, setPanelErr] = useState("");
+        const wide = useWide(1024);
+        const panelVisible = !isRV && (chatOpen || !!split);
+        const closeChat = () => { setChatOpen(false); setSplit(null); };
+        useEffect(() => {
+          if (!panelVisible) return undefined;
+          const st = document.createElement("style"); st.setAttribute("data-samm-dock", "");
+          st.textContent = wide ? "body{padding-right:440px!important;box-sizing:border-box}" : "body{padding-bottom:50vh!important;box-sizing:border-box} #root > div{height:50vh!important}";
+          document.head.appendChild(st); return () => { st.remove(); };
+        }, [panelVisible, wide]);
+        useEffect(() => { if (midEl && reviewCard && reviewCard.status !== "done" && midEl.scrollIntoView) midEl.scrollIntoView({ block: "nearest", behavior: "smooth" }); }, [reviewCard && reviewCard.id, !!midEl]);
         useEffect(() => { if (reviewCard && messagesEndRef.current && messagesEndRef.current.scrollIntoView) messagesEndRef.current.scrollIntoView({ behavior: "smooth" }); }, [reviewCard && reviewCard.id, reviewCard && reviewCard.status]);
         const assistCtx = () => ({ api: api2, canFix: CAN_FIX, canPublish: ["analyst", "engineer", "admin", "system_admin"].includes(role), tiles, setTiles, activeView, defaultView, client: acting || (identity && identity.tenant_id) || "", mode: "chat",
-          openReport: (id) => { window.dispatchEvent(new CustomEvent("samm-open-report", { detail: { id } })); }, reportsChanged: () => {} });
+          openReport: (id) => { window.dispatchEvent(new CustomEvent("samm-open-report", { detail: { id } })); }, reportsChanged: () => {},
+          isAdmin: ["admin", "system_admin"].includes(role), isSys: role === "system_admin", me: (identity && identity.email) || "", clientName: cname(acting || (identity && identity.tenant_id) || "") });
         const reviewAct = async (card, action, arg) => {
           setReviewBusy(true);
           try {
@@ -5018,7 +4983,7 @@
           addMessage({ role: "user", text: userText });
           setInput("");
           if (planned.card) setReviewCard(planned.card);
-          addMessage({ role: "assistant", text: (planned.text || "") + (planned.card ? "\n\nIt is just below for you to review." : ""), chips: planned.chips || [] });
+          addMessage({ role: "assistant", text: (planned.text || "") + (planned.card ? "\n\nIt is in the middle of the page for you to review. Press Keep there, or Discard." : ""), chips: planned.chips || [] });
         };
         const rememberSaying = async (id) => {
           const m = messages.find((x) => x.id === id); if (!m || !m.remember) return;
@@ -5102,7 +5067,7 @@
             simulated: true,
             text: "Simulated ingestion request\nTarget handler: shiftleft-superposition-pipeline-orchestrator\nAsset: " + s3Path.trim() + "\n\nNo request was sent: the ingestion endpoint is not connected to this page yet.",
           });
-          setActiveTab("chat");
+          setChatOpen(true);
           setIsLoading(false);
         };
 
@@ -5113,13 +5078,13 @@
 
         const navClass = (tab, disabled) =>
           "navbtn w-full text-left flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition" + (activeTab === tab ? " on" : "");
-        const PAGE_TITLES = { overview: "Overview", chat: "Ask SAMM", dashboard: "Reports", connections: "Connections", s3: "S3 bucket", datasets: "Datasets", governance: "Authorizations" };
+        const PAGE_TITLES = { overview: "Overview", dashboard: "Reports", connections: "Connections", s3: "S3 bucket", datasets: "Datasets", governance: "Authorizations" };
         const [uiTheme, flipTheme] = useTheme();
         const [showPw, setShowPw] = useState(false);
 
         const splitLabel = split ? (split.reportId && openReport ? openReport.title : friendlyView(split.view || split.dataset, acting || identity.tenant_id)) : "";
         return (
-          <SplitCtx.Provider value={{ open: !!split && activeTab !== "chat", dataset: split ? split.dataset : "", view: split ? split.view : "", reportId: split ? split.reportId : "", live }}>
+          <SplitCtx.Provider value={{ open: !!split, dataset: split ? split.dataset : "", view: split ? split.view : "", reportId: split ? split.reportId : "", live }}>
           <div className="flex h-screen bg-[#191919] text-[#E3E3E3] font-sans overflow-hidden w-full">
             {/* LEFT SIDEBAR PANEL */}
             <div data-testid="sidebar" className="samm-side w-64 border-r flex flex-col justify-between flex-shrink-0">
@@ -5148,8 +5113,8 @@
                   {!isRV && <button data-testid="nav-overview" onClick={() => setActiveTab("overview")} className={navClass("overview", false)}>
                     <Icon name="home" /><span>Overview</span>
                   </button>}
-                  {!isRV && <button data-testid="nav-chat" onClick={() => setActiveTab("chat")} className={navClass("chat", false)}>
-                    <Icon name="chat" /><span>Ask SAMM</span>
+                  {!isRV && <button data-testid="nav-chat" onClick={() => setChatOpen(true)} className={"navbtn w-full text-left flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition" + (panelVisible ? " on" : "")}>
+                    <Icon name="chat" /><span>Chat with SAMM</span>
                   </button>}
                   <button data-testid="nav-dashboard" onClick={() => setActiveTab("dashboard")} className={navClass("dashboard", false)}>
                     <Icon name="reports" /><span>Reports{tiles.length ? " (" + tiles.length + ")" : ""}</span>
@@ -5193,7 +5158,7 @@
                   <div className="text-xs font-mono space-y-1">
                     <div data-testid="who-role" className="text-white">{ROLE_LABELS[identity.role] || identity.role}</div>
                     <div className="side-muted truncate" title={identity.email}>{identity.email}</div>
-                    <div data-testid="who-version" className="side-muted opacity-80">Server {identity.version || "older than v35 - redeploy the backend"} · Screen v50</div>
+                    <div data-testid="who-version" className="side-muted opacity-80">Server {identity.version || "older than v35 - redeploy the backend"} · Screen v51</div>
                     <div className="flex gap-3 mt-2">
                       {identity.can_change_password !== false && <button data-testid="change-password-open" onClick={() => setShowPw(true)} className="side-muted hover-w underline">Change password</button>}
                       <button onClick={onSignOut} className="side-muted hover-w underline">Sign out</button>
@@ -5229,6 +5194,7 @@
                       </select>
                     </label>
                   )}
+                  {!isRV && <button data-testid="open-assistant" onClick={() => (panelVisible ? closeChat() : setChatOpen(true))} className="border border-[#8ef4b2] text-[#8ef4b2] hover:bg-[#8ef4b2]/10 rounded-md px-3 h-[34px] inline-flex items-center gap-2 font-medium">{panelVisible ? "Close chat" : "Chat with SAMM"}</button>}
                   <button
                     onClick={() => setPanelOpen((o) => !o)}
                     data-testid="panel-toggle"
@@ -5249,86 +5215,17 @@
               </header>
 
               <div className="flex-1 overflow-y-auto p-6 space-y-4">
+                {panelVisible && <div ref={setMidEl} data-testid="review-mid" className="max-w-5xl mx-auto w-full space-y-3 empty:hidden" />}
+                {panelVisible && midEl && reviewCard && reviewCard.status !== "done" && ReactDOM.createPortal(
+                  <section data-testid="review-mid-card" className="rounded-2xl border border-[#8ef4b2]/40 bg-[#10193a] p-3">
+                    <div data-testid="review-panel">
+                      <ReviewCard card={reviewCard} busy={reviewBusy} onAct={reviewAct} onDiscard={() => setReviewCard(null)} />
+                    </div>
+                  </section>, midEl)}
                 {!demo && <NoticeBar session={session} />}
-                {activeTab === "chat" && (
-                  <div className="max-w-4xl mx-auto space-y-6">
-                    {messages.map((msg) => (
-                      <div key={msg.id} className={"flex " + (msg.role === "user" ? "justify-end" : "justify-start")}>
-                        <div className={"max-w-[85%] rounded-xl p-5 shadow-lg " + (msg.role === "user" ? "bg-amber-600 text-white" : "bg-[#222222] border border-[#2D2D2D] text-[#E3E3E3]")}>
-                          <div className="text-xs font-mono text-[#A0A0A0] mb-2 flex justify-between items-center space-x-6">
-                            <span className="font-bold text-amber-500">{msg.role === "user" ? "USER TRANSACTION" : "SAMM AI ENGINE"}</span>
-                            <span>{msg.simulated ? "SIMULATED · " : ""}{msg.timestamp}</span>
-                          </div>
-                          {msg.error ? (
-                            <ErrorCard message={msg.error.message} details={msg.error.details} status={msg.error.status} />
-                          ) : (
-                            <MessageBody msg={msg} onOpenArtifact={openArtifact} />
-                          )}
-                          {msg.sqlArtifact && (
-                            <button
-                              onClick={() => openArtifact(msg.sqlArtifact.id)}
-                              data-testid="sql-chip"
-                              className="mt-3 text-xs font-mono text-amber-500 hover:text-amber-400 underline"
-                            >
-                              Show executed SQL
-                            </button>
-                          )}
-                          {!/\n\|[\s:|-]+\|/.test(msg.text || "") && <ResultTable rows={msg.rows} />}
-                          {msg.role === "assistant" && !msg.error && <ChartBlock rows={msg.rows} title={msg.question} onPin={() => pinTile(msg.question, msg.rows)} />}
-                          {msg.suggestions && msg.suggestions.length > 0 && msg === messages[messages.length - 1] && (
-                            <div className="flex flex-wrap gap-2 mt-3" data-testid="suggestions">
-                              {msg.suggestions.map((sg) => (
-                                <button key={sg} data-testid="suggestion" disabled={isLoading} onClick={() => sendText(sg, { chip: true })}
-                                  className="text-xs border border-[#3D3D3D] hover:border-amber-500 text-[#D0D0D0] px-3 py-1.5 rounded-full disabled:opacity-50">{sg}</button>
-                              ))}
-                            </div>
-                          )}
-                          {msg.buildDone && <button data-testid="open-dashboard" onClick={() => setActiveTab("dashboard")} className="mt-3 text-xs border border-[#8ef4b2] text-[#8ef4b2] px-3 py-1.5 rounded-lg">Open the dashboard</button>}
-                          {msg.chips && msg.chips.length > 0 && msg === messages[messages.length - 1] && (
-                            <div className="flex flex-wrap gap-2 mt-3" data-testid="chat-chips">
-                              {msg.chips.map((c) => <button key={c.label} data-testid="chat-chip" disabled={isLoading} onClick={() => sendText(c.send)} className="text-xs border border-[#3D3D3D] hover:border-amber-500 text-[#D0D0D0] px-3 py-1.5 rounded-full disabled:opacity-50">{c.label}</button>)}
-                            </div>
-                          )}
-                          {msg.remember && (
-                            <div data-testid="remember" className="mt-3 text-[11px] text-[#b8c2d6] border-t border-[#2D2D2D] pt-2">
-                              {msg.remember.saved
-                                ? <span data-testid="remember-saved" className="text-[#8ef4b2]">Remembered. From now on, "{msg.remember.said}" means "{msg.remember.meant}" for your whole team.</span>
-                                : <>Did that answer what you meant? <button data-testid="remember-btn" onClick={() => rememberSaying(msg.id)} className="underline text-[#8ef4b2] hover:text-white">Remember it for next time</button>{msg.remember.error && <span className="text-red-300"> {msg.remember.error}</span>}</>}
-                            </div>
-                          )}
-                          {msg.diagnostic && (
-                            <div data-testid="diagnostic" className="text-[10px] text-amber-400/80 mt-2 font-mono">Engineer note: {msg.diagnostic}</div>
-                          )}
-                          {msg.meta && (
-                            <div className="text-[10px] text-[#707070] mt-2 font-mono">
-                              role {msg.meta.role} · tenant {msg.meta.tenant} · row cap {msg.meta.cap}{msg.meta.truncated ? " · results truncated at the cap" : ""}
-                              {msg.meta.finops && (" · scanned " + fmtBytes(msg.meta.finops.scanned_bytes) + " of " + fmtBytes(msg.meta.finops.ceiling_bytes) + " limit · est. $" + msg.meta.finops.est_cost_usd.toFixed(5))}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                    {isLoading && (
-                      <div className="flex justify-start">
-                        <div className="bg-[#222222] border border-[#2D2D2D] rounded-xl p-4 flex items-center space-x-3">
-                          <span className="text-xs font-mono text-[#A0A0A0] animate-pulse">⚙️ Compiling Bedrock pipeline...</span>
-                        </div>
-                      </div>
-                    )}
-                    {reviewCard && (
-                      <div data-testid="review-panel" className="rounded-2xl border border-[#8ef4b2]/40 bg-[#10193a] p-3">
-                        <div className="flex items-center justify-between mb-2"><span className="text-[10px] uppercase text-[#8ef4b2] font-mono">Review</span><button data-testid="review-close" aria-label="Close review" onClick={() => setReviewCard(null)} className="text-[#A0A0A0] hover:text-white text-sm">✕</button></div>
-                        <ReviewCard card={reviewCard} busy={reviewBusy} onAct={reviewAct} onDiscard={() => setReviewCard(null)} />
-                        {reviewCard.status === "done" && reviewCard.kind === "dashboard" && <button data-testid="open-dashboard" onClick={() => setActiveTab("dashboard")} className="mt-3 text-xs border border-[#8ef4b2] text-[#8ef4b2] px-3 py-1.5 rounded-lg">Open the dashboard</button>}
-                      </div>
-                    )}
-                    <div ref={messagesEndRef} />
-                  </div>
-                )}
-
                 {activeTab === "overview" && (
                   <OverviewHub session={session} demo={demo} client={acting || identity.tenant_id} clientName={cname(acting || identity.tenant_id)} tiles={tiles} canOnboard={canOnboard} role={role}
-                    onGo={(t) => setActiveTab(t)} onAsk={(q) => { setActiveTab("chat"); sendText(q); }} />
+                    onGo={(t) => (t === "chat" ? setChatOpen(true) : setActiveTab(t))} onAsk={(q) => { setChatOpen(true); sendText(q); }} />
                 )}
 
                 {activeTab === "s3" && !demo && (
@@ -5351,7 +5248,7 @@
                       loadViews();
                       setActiveView(v);
                       setTalk(null);
-                      setActiveTab("chat");
+                      setChatOpen(true);
                       addMessage({ role: "assistant", text: "Now answering from the dataset **" + friendlyView(v, acting || identity.tenant_id) + "**. Ask a question, for example: How many records are there?" });
                     }}
                   />
@@ -5397,7 +5294,7 @@
 
                 {activeTab === "dashboard" && (
                   <DashboardHub setTiles={setTiles} role={role} activeView={activeView} defaultView={defaultView} viewerOnly={isRV} canManage={CAN_ONBOARD.includes(role)} client={acting || identity.tenant_id} api={(p) => callBackend(session.url, session.token, p)} openId={openReportId} onOpenHandled={() => setOpenReportId("")} onPublished={(tool, title, n) => callBackend(session.url, session.token, { action: "publish_report", tool, title, tiles: n }).catch(() => {})} tiles={tiles} onAddTiles={(list) => setTiles((p) => list.concat(p).slice(0, 12))} onRemove={(id) => setTiles((p) => p.filter((x) => x.id !== id))} onRefresh={refreshTile}
-                    onAsk={(q) => { setActiveTab("chat"); sendText(q); }} />
+                    onAsk={(q) => { setChatOpen(true); sendText(q); }} />
                 )}
 
                 {activeTab === "governance" && (
@@ -5412,44 +5309,80 @@
                 )}
               </div>
 
-              {activeTab === "chat" && (
-                <form onSubmit={handleSendMessage} className="border-t border-[#2D2D2D] bg-[#1A1A1A] p-4">
-                  <div className="max-w-4xl mx-auto flex space-x-3">
-                    <select
-                      aria-label="Persona"
-                      value={persona}
-                      onChange={(e) => setPersona(e.target.value)}
-                      className="bg-[#2D2D2D] border border-[#3D3D3D] rounded-lg px-2 text-xs text-white font-mono focus:outline-none focus:border-amber-500"
-                    >
+            </div>
+
+            {panelVisible && (
+              <aside data-testid="assistant-drawer" data-dock={wide ? "right" : "bottom"} style={wide ? { position: "fixed", top: 0, right: 0, bottom: 0, width: 440, zIndex: 40 } : { position: "fixed", left: 0, right: 0, bottom: 0, height: "50vh", zIndex: 40 }} className={"flex flex-col bg-[#10193a] border-[#2c385d] " + (wide ? "border-l" : "border-t")}>
+                <div className="h-14 px-4 flex items-center justify-between border-b border-[#2c385d] shrink-0">
+                  <div className="min-w-0"><div className="text-sm font-bold text-white">Chat with SAMM</div><div className="text-[10px] text-[#8ef4b2] font-mono truncate" data-testid="split-scope">{PAGE_TITLES[activeTab] || "SAMM"} · {cname(acting || identity.tenant_id)}{split ? " · About: " + splitLabel : ""}</div></div>
+                  <button data-testid="assistant-close" onClick={closeChat} aria-label="Close chat panel" className="border border-[#3D3D3D] hover:border-[#8ef4b2] text-white text-xs px-2 py-1 rounded">Close ✕</button>
+                </div>
+                <div className="flex-1 overflow-y-auto p-3 space-y-3" data-testid="chat-feed">
+                  {messages.length === 0 && <div data-testid="drawer-assistant" className="rounded-lg p-3 text-sm bg-[#1b2547] border border-[#2c385d] text-[#d6def0]">Tell me what you want, on any page. For example: build me a dashboard of total rent by site, give me the landsec report, combine the property table and the weekly tasks report, publish this to Power BI and email it to anna@company.com{CAN_ONBOARD.includes(role) ? ", invite jane@company.com as a viewer" : ""}. Or just ask a question about your data.</div>}
+                  {messages.map((msg) => (
+                    <div key={msg.id} data-testid={msg.role === "user" ? "drawer-user" : "drawer-assistant"} className={"rounded-lg p-3 text-sm " + (msg.role === "user" ? "bg-blue-600 text-white ml-8" : "bg-[#1b2547] border border-[#2c385d] text-[#E3E3E3] mr-2")}>
+                      {msg.simulated && <div className="text-[10px] font-mono text-amber-400 mb-1">SIMULATED · {msg.timestamp}</div>}
+                      {msg.error ? <ErrorCard message={msg.error.message} details={msg.error.details} status={msg.error.status} /> : <MessageBody msg={msg} onOpenArtifact={openArtifact} />}
+                      {msg.sqlArtifact && <button onClick={() => openArtifact(msg.sqlArtifact.id)} data-testid="sql-chip" className="mt-2 text-xs font-mono text-amber-500 hover:text-amber-400 underline">Show executed SQL</button>}
+                      {!/\n\|[\s:|-]+\|/.test(msg.text || "") && <ResultTable rows={msg.rows} />}
+                      {msg.role === "assistant" && !msg.error && <ChartBlock rows={msg.rows} title={msg.question} onPin={() => pinTile(msg.question, msg.rows)} />}
+                      {msg.role === "assistant" && !msg.error && split && split.reportId && Array.isArray(msg.rows) && msg.rows.length > 0 && (
+                        <button data-testid="add-to-report" disabled={!!added[msg.id]} onClick={async () => { setPanelErr(""); try { await addToReport(msg); setAdded((x) => ({ ...x, [msg.id]: true })); } catch (e) { setPanelErr((e && e.message) || "Could not add that to the report."); } }} className="mt-2 text-xs border border-[#8ef4b2]/60 text-[#8ef4b2] hover:bg-[#8ef4b2]/10 px-2 py-1 rounded disabled:opacity-60">{added[msg.id] ? "Added to report ✓" : "Add to report"}</button>
+                      )}
+                      {msg.suggestions && msg.suggestions.length > 0 && msg === messages[messages.length - 1] && (
+                        <div className="flex flex-wrap gap-2 mt-3" data-testid="suggestions">
+                          {msg.suggestions.map((sg) => (
+                            <button key={sg} data-testid="suggestion" disabled={isLoading} onClick={() => sendText(sg, { chip: true })} className="text-xs border border-[#3D3D3D] hover:border-[#8ef4b2] text-[#D0D0D0] px-3 py-1.5 rounded-full disabled:opacity-50">{sg}</button>
+                          ))}
+                        </div>
+                      )}
+                      {msg.buildDone && <button data-testid="open-dashboard" onClick={() => setActiveTab("dashboard")} className="mt-3 text-xs border border-[#8ef4b2] text-[#8ef4b2] px-3 py-1.5 rounded-lg">Open the dashboard</button>}
+                      {msg.chips && msg.chips.length > 0 && msg === messages[messages.length - 1] && (
+                        <div className="flex flex-wrap gap-2 mt-3" data-testid="chat-chips">
+                          {msg.chips.map((c) => <button key={c.label} data-testid="chat-chip" disabled={isLoading} onClick={() => sendText(c.send)} className="text-xs border border-[#3D3D3D] hover:border-[#8ef4b2] text-[#D0D0D0] px-3 py-1.5 rounded-full disabled:opacity-50">{c.label}</button>)}
+                        </div>
+                      )}
+                      {msg.remember && (
+                        <div data-testid="remember" className="mt-3 text-[11px] text-[#b8c2d6] border-t border-[#2c385d] pt-2">
+                          {msg.remember.saved
+                            ? <span data-testid="remember-saved" className="text-[#8ef4b2]">Remembered. From now on, "{msg.remember.said}" means "{msg.remember.meant}" for your whole team.</span>
+                            : <>Did that answer what you meant? <button data-testid="remember-btn" onClick={() => rememberSaying(msg.id)} className="underline text-[#8ef4b2] hover:text-white">Remember it for next time</button>{msg.remember.error && <span className="text-red-300"> {msg.remember.error}</span>}</>}
+                        </div>
+                      )}
+                      {msg.diagnostic && <div data-testid="diagnostic" className="text-[10px] text-amber-400/80 mt-2 font-mono">Engineer note: {msg.diagnostic}</div>}
+                      {msg.meta && (
+                        <div className="text-[10px] text-[#707070] mt-2 font-mono">
+                          role {msg.meta.role} · tenant {msg.meta.tenant} · row cap {msg.meta.cap}{msg.meta.truncated ? " · results truncated at the cap" : ""}
+                          {msg.meta.finops && (" · scanned " + fmtBytes(msg.meta.finops.scanned_bytes) + " of " + fmtBytes(msg.meta.finops.ceiling_bytes) + " limit · est. $" + msg.meta.finops.est_cost_usd.toFixed(5))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  {isLoading && <div className="text-xs font-mono text-[#A0A0A0] animate-pulse">SAMM is working...</div>}
+                  {reviewCard && reviewCard.status === "done" && (
+                    <div data-testid="review-done" className="rounded-lg p-3 bg-[#1b2547] border border-[#2c385d]">
+                      <ReviewCard card={reviewCard} busy={reviewBusy} onAct={reviewAct} onDiscard={() => setReviewCard(null)} />
+                      {reviewCard.kind === "dashboard" && <button data-testid="open-dashboard" onClick={() => setActiveTab("dashboard")} className="mt-3 text-xs border border-[#8ef4b2] text-[#8ef4b2] px-3 py-1.5 rounded-lg">Open the dashboard</button>}
+                    </div>
+                  )}
+                  {panelErr && <div className="text-[11px] text-amber-200">{panelErr}</div>}
+                  <div ref={messagesEndRef} />
+                </div>
+                <form onSubmit={handleSendMessage} className="border-t border-[#2c385d] p-3 space-y-2 shrink-0">
+                  <div className="flex items-center gap-2">
+                    <select aria-label="Persona" value={persona} onChange={(e) => setPersona(e.target.value)} className="bg-[#1b2547] border border-[#2c385d] rounded-lg px-2 py-1 text-[11px] text-white font-mono focus:outline-none focus:border-[#8ef4b2]">
                       {PERSONAS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
                     </select>
                     {talk && talk.context && (
-                      <button data-testid="talk-chip" title="SAMM is answering follow-ups about this. Click to clear." onClick={() => setTalk(null)}
-                        className="text-[10px] font-mono border border-amber-500/50 text-amber-300 rounded-full px-2 py-1 whitespace-nowrap hover:border-amber-400">Talking about: {talk.context} ✕</button>
+                      <button type="button" data-testid="talk-chip" title="SAMM is answering follow-ups about this. Click to clear." onClick={() => setTalk(null)} className="text-[10px] font-mono border border-amber-500/50 text-amber-300 rounded-full px-2 py-1 truncate hover:border-amber-400">Talking about: {talk.context} ✕</button>
                     )}
-                    <input
-                      aria-label="Ask a question"
-                      value={input}
-                      onChange={(e) => setInput(e.target.value)}
-                      disabled={isLoading}
-                      placeholder="Ask a question about your Gold data..."
-                      className="flex-1 bg-[#2D2D2D] border border-[#3D3D3D] rounded-lg py-2.5 px-4 text-sm text-white focus:outline-none focus:border-amber-500 disabled:opacity-50"
-                    />
-                    <button
-                      type="submit"
-                      disabled={isLoading || !input.trim()}
-                      className="bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-bold text-sm px-6 rounded-lg transition"
-                    >
-                      Send
-                    </button>
+                  </div>
+                  <div className="flex gap-2">
+                    <input aria-label="Ask a question" data-testid="drawer-input" value={input} onChange={(e) => setInput(e.target.value)} disabled={isLoading} placeholder="Describe what you want..." className="flex-1 bg-[#1b2547] border border-[#2c385d] rounded-lg py-2 px-3 text-sm text-white focus:outline-none focus:border-[#8ef4b2] disabled:opacity-50" />
+                    <button type="submit" data-testid="drawer-send" disabled={isLoading || !input.trim()} className="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-sm px-3 rounded-lg">Send</button>
                   </div>
                 </form>
-              )}
-            </div>
-
-            {split && activeTab !== "chat" && (
-              <SplitChat messages={messages} since={split.since + 1} isLoading={isLoading} input={input} setInput={setInput} onSend={sendText}
-                onClose={() => setSplit(null)} label={splitLabel} reportId={split.reportId} onAdd={addToReport} onOpenArtifact={openArtifact} />
+              </aside>
             )}
             {/* RIGHT-HAND ARTIFACT PANEL */}
             <ArtifactPanel
