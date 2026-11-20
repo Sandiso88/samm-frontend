@@ -719,7 +719,7 @@
       // v53: Power BI now gets a finished report (charts on pages), not only the data tables
       const pbiLine = (r) => r.report_link
         ? "Power BI report " + (r.report_status === "updated" ? "updated" : "created") + ": \"" + r.dataset + "\" with " + r.visuals + " visual" + (r.visuals === 1 ? "" : "s") + " on " + r.pages + " page" + (r.pages === 1 ? "" : "s") + (r.report_themed === false ? " (standard look)" : "") + ((r.report_header === false || r.report_art === false) && r.report_themed !== false ? " (made without the " + [r.report_art === false ? "logo and background picture" : "", r.report_header === false ? "title box" : ""].filter(Boolean).join(" and ") + ": Power BI would not take " + (r.report_art === false && r.report_header === false ? "them" : "it") + ")" : "") + ". The link opens the finished report."
-        : "Sent the data to Power BI (dataset \"" + r.dataset + "\", " + r.rows + " row(s) in " + (r.tables || []).length + " table(s)), but the report itself could not be made" + (r.report_error ? ": " + r.report_error : ".") + " You can still create one from the dataset in Power BI.";
+        : "Sent the data to Power BI (dataset \"" + r.dataset + "\", " + r.rows + " row(s) in " + (r.tables || []).length + " table(s)), but the report itself could not be made" + (r.report_error ? ": " + r.report_error : ".") + ((r.report_notes || []).length > 1 ? " It tried " + r.report_notes.length + " looks; the first was refused with: " + String(r.report_notes[0]).slice(0, 240) : "") + " You can still create one from the dataset in Power BI.";
       let cardSeq = 0;
       const newCard = (kind, extra) => ({ id: "c" + ++cardSeq, kind, status: "open", ...extra });
       function parseBuildCommand(text) {
@@ -1204,6 +1204,7 @@
       }
       function ReviewCard({ card, busy, onAct, onDiscard }) {
         const [title, setTitle] = useState(card.title || "");
+        const [cardShut, setCardShut] = useState(false);   // v59: a review card can be folded away or closed
         useEffect(() => { setTitle(card.title || ""); }, [card.id]);
         const done = card.status === "done";
         const keepBtn = (label, disabled) => <button data-testid="card-keep" disabled={busy || disabled} onClick={() => onAct(card, "keep")} className="border border-[#8ef4b2] text-[#8ef4b2] text-xs px-3 py-1.5 rounded-lg disabled:opacity-50">{label}</button>;
@@ -1302,13 +1303,20 @@
         }
         return (
           <div data-testid="review-card" data-kind={card.kind} className="mt-2 border border-[#2c385d] rounded-2xl p-3 bg-[#13214a]/60 space-y-2">
-            <div className="text-[10px] uppercase tracking-wide text-[#78869b]">Review{done ? " · done" : ""}</div>
+            <div className="flex items-center gap-2">
+              <div className="flex-1 text-[10px] uppercase tracking-wide text-[#78869b]">Review{done ? " · done" : ""}</div>
+              <Chevron open={!cardShut} onClick={() => setCardShut(!cardShut)} label="review" testid="review-collapse" />
+              <button type="button" data-testid="review-close" aria-label="Close this review" title={done ? "Close" : "Close without saving"} disabled={busy} onClick={() => onDiscard(card)} className="shrink-0 w-6 h-6 rounded border border-[#3D3D3D] text-[#b8c2d6] hover:text-white text-sm leading-none disabled:opacity-40">&times;</button>
+            </div>
+            {cardShut && <div data-testid="review-summary" className="text-xs text-[#b8c2d6]">{done ? (card.doneText || "Done.") : "Waiting for your choice."}</div>}
+            {!cardShut && <>
             {body}
             {card.error && <div data-testid="card-error" className="text-[11px] text-red-300">{card.error}</div>}
             {done && <div data-testid="card-done" className="text-xs text-[#8ef4b2]">{card.doneText}</div>}
             {done && card.openId && <button data-testid="card-open-new" onClick={() => onAct(card, "open", card.openId)} className="text-xs border border-[#8ef4b2] text-[#8ef4b2] px-3 py-1.5 rounded-lg">{card.openLabel || "Open the new report"}</button>}
             {done && <CardLinks card={card} />}
             {footer}
+            </>}
           </div>
         );
       }
@@ -5313,7 +5321,10 @@
         };
         const api2 = (p) => callBackend(session.url, session.token, p);
         const CAN_FIX = CAN_ONBOARD.includes(role);
-        const [reviewCard, setReviewCard] = useState(null);       // v48: the card shown in the review panel on Ask SAMM
+        const [reviewCard, setReviewCardRaw] = useState(null);       // v48: the card shown in the review panel on Ask SAMM
+        // v59: a review card belongs to the tab it was opened on; on any other tab it is not shown
+        const reviewRef = useRef(null); const cardTab = useRef(""); const activeTabRef = useRef(activeTab); activeTabRef.current = activeTab;
+        const setReviewCard = (c) => { if (c && !reviewRef.current) cardTab.current = activeTabRef.current; reviewRef.current = c || null; setReviewCardRaw(c || null); };
         const [reviewBusy, setReviewBusy] = useState(false);
         // v51: ONE chat panel for every tab. It docks on the right; the page, sidebar and top bar fit beside it.
         const [chatOpen, setChatOpen] = useState(() => { try { return String(window.location.hash || "") === "#chat"; } catch (_) { return false; } });
@@ -5324,7 +5335,10 @@
         const panelVisible = !isRV && (chatOpen || !!split);
         // v54: a review card comes up in the middle of the page on its own; the chat panel opens only when the person opens it
         const [midNote, setMidNote] = useState("");
-        const midVisible = !isRV && (panelVisible || !!reviewCard || !!midNote);
+        const cardHere = !!reviewCard && (activeTab === cardTab.current || panelVisible);   // with the chat panel open the card shows on any tab
+        const midVisible = !isRV && (panelVisible || cardHere || !!midNote);
+        // leaving the tab: a finished or failed card is closed, a card waiting for a choice stays until you come back
+        useEffect(() => { if (reviewRef.current && activeTab !== cardTab.current && !panelVisible && (reviewRef.current.status === "done" || reviewRef.current.error)) setReviewCard(null); setMidNote(""); }, [activeTab]);
         const closeChat = () => { setChatOpen(false); setSplit(null); };
         useEffect(() => {
           if (!panelVisible) return undefined;
@@ -5540,7 +5554,7 @@
                   <div className="text-xs font-mono space-y-1">
                     <div data-testid="who-role" className="text-white">{ROLE_LABELS[identity.role] || identity.role}</div>
                     <div className="side-muted truncate" title={identity.email}>{identity.email}</div>
-                    <div data-testid="who-version" className="side-muted opacity-80">Server {identity.version || "older than v35 - redeploy the backend"} · Screen v58</div>
+                    <div data-testid="who-version" className="side-muted opacity-80">Server {identity.version || "older than v35 - redeploy the backend"} · Screen v59</div>
                     <div className="flex gap-3 mt-2">
                       {identity.can_change_password !== false && <button data-testid="change-password-open" onClick={() => setShowPw(true)} className="side-muted hover-w underline">Change password</button>}
                       <button onClick={onSignOut} className="side-muted hover-w underline">Sign out</button>
@@ -5599,7 +5613,7 @@
               <div className="flex-1 overflow-y-auto p-6 space-y-4">
                 {midVisible && <div ref={setMidEl} data-testid="review-mid" className="max-w-5xl mx-auto w-full space-y-3 empty:hidden" />}
                 {midNote && <div data-testid="mid-note" className="max-w-5xl mx-auto w-full rounded-xl border border-amber-500/50 bg-amber-900/20 text-amber-100 text-sm p-3 flex items-start gap-3"><span className="flex-1">{midNote}</span><button onClick={() => setMidNote("")} className="text-xs underline">Close</button></div>}
-                {midVisible && midEl && reviewCard && (reviewCard.status !== "done" || !panelVisible) && ReactDOM.createPortal(
+                {midVisible && midEl && cardHere && (reviewCard.status !== "done" || !panelVisible) && ReactDOM.createPortal(
                   <section data-testid="review-mid-card" className="rounded-2xl border border-[#8ef4b2]/40 bg-[#10193a] p-3">
                     <div data-testid="review-panel">
                       <ReviewCard card={reviewCard} busy={reviewBusy} onAct={reviewAct} onDiscard={() => setReviewCard(null)} />
