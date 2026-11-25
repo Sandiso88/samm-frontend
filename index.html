@@ -4595,28 +4595,43 @@
       }
 
       // v63 step 1: which of the client's tables should be linked. Nothing is linked until Next.
-      function WizChoose({ rows, chosen, onToggle, onAll, onNext, clientLabel, onConnections }) {
+      function WizChoose({ rows, meta, chosen, onToggle, onAll, onNext, clientLabel }) {
         const all = rows.length;
+        const groups = [["main", "Main tables"], ["lookup", "Lookup tables"], ["list", "Shared lists"]];
+        const grp = (d) => { const g = (meta[d.ds] || {}).group; return g === "lookup" || g === "list" ? g : "main"; };
         return (
           <div data-testid="wiz-choose" className="space-y-4">
             <div className="rounded-xl border border-[#2D2D2D] p-4 space-y-3">
-              <div className="text-sm font-semibold text-white">Choose the tables to link</div>
-              <p className="text-xs text-[#A0A0A0]">These are the tables {clientLabel || "this client"} has. Every one is ticked; untick any you do not want linked or mapped. Nothing is linked until you press Next.</p>
-              <div className="flex flex-wrap items-center gap-3 text-[11px] text-[#A0A0A0]">
-                <span data-testid="choose-count">{chosen.length} of {all} ticked</span>
-                <button type="button" data-testid="choose-all" onClick={() => onAll(true)} className="underline hover:text-white">Tick all</button>
-                <button type="button" data-testid="choose-none" onClick={() => onAll(false)} className="underline hover:text-white">Untick all</button>
+              <div className="text-sm font-semibold text-white">1. Choose the tables to link</div>
+              <p className="text-xs text-[#A0A0A0]">Tick the tables that belong together. Every one of {clientLabel || "this client"}'s tables starts ticked; untick any you do not want linked or mapped. Nothing is linked until you press Next.</p>
+              <div className="flex flex-wrap items-center gap-3 text-xs text-[#C0C0C0]">
+                <button type="button" data-testid="choose-all" onClick={() => onAll(true)} className="underline">Select all</button>
+                <button type="button" data-testid="choose-none" onClick={() => onAll(false)} className="underline">None</button>
+                <span data-testid="choose-count" className="text-[#808080]">{chosen.length} of {all} ticked</span>
               </div>
-              <div className="space-y-1">
-                {rows.map((d) => (
-                  <label key={d.ds} data-testid="choose-row" className="flex flex-wrap items-center gap-3 text-xs bg-[#151515] border border-[#2D2D2D] rounded-md px-3 py-2 cursor-pointer">
-                    <input type="checkbox" data-testid="choose-tick" checked={chosen.includes(d.ds)} onChange={() => onToggle(d.ds)} />
-                    <span className="text-white font-semibold">{(d.view && titleOf(d.view)) || friendlyDs(d.ds)}</span>
-                    <span className="font-mono text-[#808080] flex-1">{d.ds}</span>
-                    <span className={"text-[10px] font-mono px-2 py-0.5 rounded " + (d.view ? "bg-green-900 text-green-200" : "bg-[#333] text-[#BBB]")}>{d.view ? "Gold view built" : "no Gold view yet"}</span>
-                  </label>
-                ))}
-              </div>
+              {groups.map(([g, title]) => {
+                const list = rows.filter((d) => grp(d) === g);
+                if (!list.length) return null;
+                return (
+                  <div key={g} data-testid={"choose-group-" + g} className="space-y-1">
+                    <div className="text-[#808080] uppercase tracking-wide text-[10px]">{title}</div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-1">
+                      {list.map((d) => {
+                        const m = meta[d.ds] || {};
+                        return (
+                          <label key={d.ds} data-testid="choose-row" title={d.ds} className="flex flex-wrap items-center gap-x-2 px-2 py-1 border border-[#262626] rounded cursor-pointer hover:border-[#3D3D3D] text-xs">
+                            <input type="checkbox" data-testid="choose-tick" checked={chosen.includes(d.ds)} onChange={() => onToggle(d.ds)} />
+                            <span className="text-white font-semibold">{nice(m.label || (d.view && titleOf(d.view)) || friendlyDs(d.ds))}</span>
+                            <span className="text-[#808080]">{m.source === "database" ? "database" : "files"}{m.combined ? " · combined" : ""}{m.links ? " · " + m.links + " approved link(s)" : ""}</span>
+                            {m.new && <span data-testid="choose-new" className="px-1.5 rounded-full border border-amber-600 text-amber-300 text-[10px]">new</span>}
+                            <span className={"px-1.5 rounded-full text-[10px] " + (d.view ? "bg-green-900 text-green-200" : "bg-[#333] text-[#BBB]")}>{d.view ? "Gold view built" : "no Gold view yet"}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
             <WizBar back={null} next={onNext} nextLabel="Next: link them" nextOff={chosen.length === 0} hint={chosen.length === 0 ? "Tick at least one table." : chosen.length === 1 ? "Only one table is ticked, so there is nothing to link yet. You can still go on to mapping." : chosen.length + " tables ticked. Press Next to link them."} />
           </div>
@@ -4678,11 +4693,16 @@
       // v62: Datasets > Links & drill-down is the guided flow after the data is in Bronze: Link, Map & calculate, Move to reporting.
       function DatasetsWizard({ api, role, clientLabel, phase, reached, onGo, onAsk, onChanged, onReports, onConnections, sel, onSel }) {
         const [rows, setRows] = useState(null);
+        const [meta, setMeta] = useState({});        // what each table is (main, lookup or shared list; files or database; links), when the server can say
         const [err, setErr] = useState(null);
         const [tick, setTick] = useState(0);
         useEffect(() => {
           let live = true;
-          (async () => { try { const r = await api({ action: "datasets" }); if (live) { setRows(r.datasets || []); setErr(null); } } catch (e) { if (live) { setErr(e); setRows((x) => x || []); } } })();
+          (async () => {
+            let m = null;
+            try { const sc = await api({ action: "links_scope_get" }); if (sc && Array.isArray(sc.tables)) { m = {}; sc.tables.forEach((t) => { m[t.dataset] = t; }); } } catch (_) { /* the list still works without the extra detail */ }
+            try { const r = await api({ action: "datasets" }); if (live) { if (m) setMeta(m); setRows(r.datasets || []); setErr(null); } } catch (e) { if (live) { setErr(e); setRows((x) => x || []); } }
+          })();
           return () => { live = false; };
         }, [tick]);
         const everyDs = (rows || []).map((d) => ({ ds: d.dataset, state: "done", view: d.view || "", jobId: null }));
@@ -4713,7 +4733,7 @@
                 <button type="button" data-testid="ds-to-connections" onClick={onConnections} className="border border-[#3D3D3D] hover:border-amber-500 text-white px-3 py-1.5 rounded-lg">Go to Connections</button>
               </div>
             )}
-            {rows !== null && everyDs.length > 0 && phase === "choose" && <WizChoose rows={everyDs} chosen={chosen} clientLabel={clientLabel} onToggle={toggle} onAll={(on) => onSel(on ? everyDs.map((d) => d.ds) : [])} onNext={() => onGo("link")} />}
+            {rows !== null && everyDs.length > 0 && phase === "choose" && <WizChoose rows={everyDs} meta={meta} chosen={chosen} clientLabel={clientLabel} onToggle={toggle} onAll={(on) => onSel(on ? everyDs.map((d) => d.ds) : [])} onNext={() => onGo("link")} />}
             {rows !== null && everyDs.length > 0 && phase === "link" && <WizLink api={api} role={role} datasets={chosen} onBack={() => onGo("choose")} backLabel="Back to the tables" onNext={() => onGo("review")} />}
             {rows !== null && everyDs.length > 0 && phase === "review" && <WizReview api={api} role={role} onBack={() => onGo("link")} onNext={() => onGo("map")} />}
             {rows !== null && everyDs.length > 0 && phase === "map" && <WizMap api={api} datasets={ds} onAsk={onAsk} onBuilt={() => { onChanged(); setTick((n) => n + 1); }} onBack={() => onGo("review")} onNext={() => onGo("ready")} nextLabel="Next: move to reporting" />}
@@ -6009,7 +6029,7 @@
                   <div className="text-xs font-mono space-y-1">
                     <div data-testid="who-role" className="text-white">{ROLE_LABELS[identity.role] || identity.role}</div>
                     <div className="side-muted truncate" title={identity.email}>{identity.email}</div>
-                    <div data-testid="who-version" className="side-muted opacity-80">Server {identity.version || "older than v35 - redeploy the backend"} · Screen v63</div>
+                    <div data-testid="who-version" className="side-muted opacity-80">Server {identity.version || "older than v35 - redeploy the backend"} · Screen v64</div>
                     <div className="flex gap-3 mt-2">
                       {identity.can_change_password !== false && <button data-testid="change-password-open" onClick={() => setShowPw(true)} className="side-muted hover-w underline">Change password</button>}
                       <button onClick={onSignOut} className="side-muted hover-w underline">Sign out</button>
