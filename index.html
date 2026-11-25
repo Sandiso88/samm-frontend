@@ -4394,8 +4394,8 @@
       const WIZ_STEPS = [["connect", "Connect", "Name the client and say where its data comes from"], ["tables", "Choose tables", "Pick the tables you want and bring them in"]];
       const WIZ_ORDER = ["connect", "tables"];
       // v62: after the data is in Bronze the rest of the flow lives in Datasets > Links & drill-down
-      const DS_STEPS = [["link", "Link", "SAMM links this client's tables that belong together"], ["map", "Map & calculate", "Standard names, calculated fields and views"], ["ready", "Move to reporting", "Your Gold views are ready for the analysts"]];
-      const DS_ORDER = ["link", "map", "ready"];
+      const DS_STEPS = [["choose", "Choose tables", "Pick the tables to link"], ["link", "Link", "SAMM links the tables that belong together"], ["review", "Review links", "Check, approve or undo the links"], ["map", "Mapping & calculations", "Standard names, calculated fields and views"], ["ready", "Move to reporting", "Your Gold views are ready for the analysts"]];
+      const DS_ORDER = ["choose", "link", "review", "map", "ready"];
       const wizSlug = (x) => { let n = String(x || "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 60); if (n && !/^[a-z]/.test(n)) n = "f_" + n; return n; };
 
       function OnboardStepper({ phase, reached, onGo, clientLabel, steps, order, prefix, testid, lead }) {
@@ -4456,13 +4456,12 @@
           <div data-testid="wiz-link" className="space-y-4">
             <div className="rounded-xl border border-[#2D2D2D] p-4 space-y-2">
               <div className="text-sm font-semibold text-white">Link this client's tables</div>
-              <p className="text-xs text-[#A0A0A0]">SAMM compares the values in each table (for example site codes or fiscal years) and links the tables that belong together. Links it is sure about are approved for you; the rest wait below for your decision. Only this client's tables are used.</p>
+              <p className="text-xs text-[#A0A0A0]">SAMM compares the values in each table (for example site codes or fiscal years) and links the tables that belong together. Links it is sure about are approved for you; the rest wait for your decision in the next step. Only the tables you chose are used.</p>
               {st.busy && <div data-testid="wiz-link-busy" className="text-xs text-amber-300">⏳ {st.prog || "Working..."}</div>}
               {!st.busy && st.text && <div data-testid="wiz-link-result" className="text-xs text-green-300">{st.text}</div>}
               <ErrBox err={st.err} />
             </div>
-            {!st.busy && <LinksPanel key={st.tick} api={api} role={role} />}
-            <WizBar back={onBack} backLabel={backLabel || "Back"} next={onNext} nextLabel="Next: map & calculate" nextOff={st.busy} hint={st.busy ? "Linking... this takes a moment." : "Happy with the links? Go on to the field mapping."} />
+            <WizBar back={onBack} backLabel={backLabel || "Back"} next={onNext} nextLabel="Next: review the links" nextOff={st.busy} hint={st.busy ? "Linking... this takes a moment." : "Done. Press Next to review the links."} />
           </div>
         );
       }
@@ -4585,12 +4584,55 @@
         return (
           <div data-testid="wiz-map" className="space-y-3">
             <div className="rounded-xl border border-[#2D2D2D] p-4 space-y-1">
-              <div className="text-sm font-semibold text-white">Map &amp; calculate</div>
+              <div className="text-sm font-semibold text-white">Mapping &amp; calculations</div>
               <p className="text-xs text-[#A0A0A0]">SAMM has already matched each table's fields to your standard names. Open a table to check the match, add the calculated fields SAMM suggests (or your own), and see the views worth building. One table is open at a time.</p>
             </div>
             {datasets.length === 0 && <div className="text-xs text-amber-200">There are no tables to map yet. Go back and bring some in.</div>}
             {datasets.map((d) => <MapCard key={d.ds} api={api} d={d} open={open === d.ds} onToggle={() => setOpen(open === d.ds ? "" : d.ds)} onAsk={onAsk} onBuilt={onBuilt} />)}
-            <WizBar back={onBack} backLabel="Back to linking" next={onNext} nextLabel={nextLabel || "Finish"} hint="When you have approved the tables you want, press Next." />
+            <WizBar back={onBack} backLabel="Back to the links" next={onNext} nextLabel={nextLabel || "Finish"} hint="When you have approved the tables you want, press Next." />
+          </div>
+        );
+      }
+
+      // v63 step 1: which of the client's tables should be linked. Nothing is linked until Next.
+      function WizChoose({ rows, chosen, onToggle, onAll, onNext, clientLabel, onConnections }) {
+        const all = rows.length;
+        return (
+          <div data-testid="wiz-choose" className="space-y-4">
+            <div className="rounded-xl border border-[#2D2D2D] p-4 space-y-3">
+              <div className="text-sm font-semibold text-white">Choose the tables to link</div>
+              <p className="text-xs text-[#A0A0A0]">These are the tables {clientLabel || "this client"} has. Every one is ticked; untick any you do not want linked or mapped. Nothing is linked until you press Next.</p>
+              <div className="flex flex-wrap items-center gap-3 text-[11px] text-[#A0A0A0]">
+                <span data-testid="choose-count">{chosen.length} of {all} ticked</span>
+                <button type="button" data-testid="choose-all" onClick={() => onAll(true)} className="underline hover:text-white">Tick all</button>
+                <button type="button" data-testid="choose-none" onClick={() => onAll(false)} className="underline hover:text-white">Untick all</button>
+              </div>
+              <div className="space-y-1">
+                {rows.map((d) => (
+                  <label key={d.ds} data-testid="choose-row" className="flex flex-wrap items-center gap-3 text-xs bg-[#151515] border border-[#2D2D2D] rounded-md px-3 py-2 cursor-pointer">
+                    <input type="checkbox" data-testid="choose-tick" checked={chosen.includes(d.ds)} onChange={() => onToggle(d.ds)} />
+                    <span className="text-white font-semibold">{(d.view && titleOf(d.view)) || friendlyDs(d.ds)}</span>
+                    <span className="font-mono text-[#808080] flex-1">{d.ds}</span>
+                    <span className={"text-[10px] font-mono px-2 py-0.5 rounded " + (d.view ? "bg-green-900 text-green-200" : "bg-[#333] text-[#BBB]")}>{d.view ? "Gold view built" : "no Gold view yet"}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+            <WizBar back={null} next={onNext} nextLabel="Next: link them" nextOff={chosen.length === 0} hint={chosen.length === 0 ? "Tick at least one table." : chosen.length === 1 ? "Only one table is ticked, so there is nothing to link yet. You can still go on to mapping." : chosen.length + " tables ticked. Press Next to link them."} />
+          </div>
+        );
+      }
+
+      // v63 step 3: the links, to approve or undo. This is the Links screen, in its own step.
+      function WizReview({ api, role, onBack, onNext }) {
+        return (
+          <div data-testid="wiz-review" className="space-y-4">
+            <div className="rounded-xl border border-[#2D2D2D] p-4 space-y-1">
+              <div className="text-sm font-semibold text-white">Review the links</div>
+              <p className="text-xs text-[#A0A0A0]">Check the links SAMM made. Approve the ones that are right, undo the ones that are not, and set up the drill-downs. When you are happy, press Next.</p>
+            </div>
+            <LinksPanel api={api} role={role} />
+            <WizBar back={onBack} backLabel="Back to linking" next={onNext} nextLabel="Next: mapping & calculations" hint="Happy with the links? Go on to the field mapping and calculations." />
           </div>
         );
       }
@@ -4615,7 +4657,7 @@
                   <button type="button" data-testid="ready-ask" onClick={() => onAsk(d.view)} className="text-amber-400 hover:text-amber-300 underline">Ask SAMM</button>
                 </div>
               ))}
-              {waiting.length > 0 && built.length > 0 && <div data-testid="ready-missing" className="text-[11px] text-amber-200">{waiting.length} table{waiting.length === 1 ? " has" : "s have"} no Gold view yet: {waiting.map((d) => friendlyDs(d.ds)).join(", ")}. Go back to Map &amp; calculate to build {waiting.length === 1 ? "it" : "them"}.</div>}
+              {waiting.length > 0 && built.length > 0 && <div data-testid="ready-missing" className="text-[11px] text-amber-200">{waiting.length} table{waiting.length === 1 ? " has" : "s have"} no Gold view yet: {waiting.map((d) => friendlyDs(d.ds)).join(", ")}. Go back to Mapping &amp; calculations to build {waiting.length === 1 ? "it" : "them"}.</div>}
               {links && links.length > 0 && (
                 <div className="space-y-1">
                   <div className="text-xs font-semibold text-white">Links between the tables</div>
@@ -4634,7 +4676,7 @@
       }
 
       // v62: Datasets > Links & drill-down is the guided flow after the data is in Bronze: Link, Map & calculate, Move to reporting.
-      function DatasetsWizard({ api, role, clientLabel, phase, reached, onGo, onAsk, onChanged, onReports, onConnections }) {
+      function DatasetsWizard({ api, role, clientLabel, phase, reached, onGo, onAsk, onChanged, onReports, onConnections, sel, onSel }) {
         const [rows, setRows] = useState(null);
         const [err, setErr] = useState(null);
         const [tick, setTick] = useState(0);
@@ -4643,7 +4685,10 @@
           (async () => { try { const r = await api({ action: "datasets" }); if (live) { setRows(r.datasets || []); setErr(null); } } catch (e) { if (live) { setErr(e); setRows((x) => x || []); } } })();
           return () => { live = false; };
         }, [tick]);
-        const ds = (rows || []).map((d) => ({ ds: d.dataset, state: "done", view: d.view || "", jobId: null }));
+        const everyDs = (rows || []).map((d) => ({ ds: d.dataset, state: "done", view: d.view || "", jobId: null }));
+        const chosen = sel === null ? everyDs.map((d) => d.ds) : everyDs.map((d) => d.ds).filter((x) => sel.includes(x));
+        const ds = everyDs.filter((d) => chosen.includes(d.ds));
+        const toggle = (x) => onSel(chosen.includes(x) ? chosen.filter((y) => y !== x) : [...chosen, x]);
         const publishAll = async () => {
           const tg = (await api({ action: "batch_targets", datasets: ds.filter((d) => d.view).map((d) => d.ds) })).targets || [];
           let ok = 0, bad = 0;
@@ -4656,21 +4701,23 @@
             <div className="bg-[#222222] border border-[#2D2D2D] rounded-xl p-5 space-y-3">
               <div>
                 <h3 className="text-sm font-bold text-white">Get {clientLabel || "this client"}'s data ready for reporting</h3>
-                <p className="text-[11px] text-[#808080] mt-1">Three steps with Next: SAMM links the tables that belong together, maps their fields and suggests calculations, then the Gold views are ready for analysts to join and report on.</p>
+                <p className="text-[11px] text-[#808080] mt-1">Five steps with Next: choose the tables, SAMM links them, you review the links, SAMM maps the fields and suggests calculations, then the Gold views are ready for analysts to join and report on.</p>
               </div>
               <OnboardStepper phase={phase} reached={reached} onGo={onGo} steps={DS_STEPS} order={DS_ORDER} prefix="dstep-" testid="ds-stepper" lead="Working on" clientLabel={clientLabel} />
             </div>
             <ErrBox err={err} />
             {rows === null && <div data-testid="ds-loading" className="text-xs text-[#A0A0A0]">Loading this client's tables...</div>}
-            {rows !== null && ds.length === 0 && (
+            {rows !== null && everyDs.length === 0 && (
               <div data-testid="ds-empty" className="rounded-xl border border-amber-800 bg-[#241E10] p-4 text-xs text-amber-200 space-y-2">
                 <div>{clientLabel || "This client"} has no tables yet. Bring data in on Connections first, then come back here.</div>
                 <button type="button" data-testid="ds-to-connections" onClick={onConnections} className="border border-[#3D3D3D] hover:border-amber-500 text-white px-3 py-1.5 rounded-lg">Go to Connections</button>
               </div>
             )}
-            {rows !== null && ds.length > 0 && phase === "link" && <WizLink api={api} role={role} datasets={ds.map((d) => d.ds)} onBack={null} onNext={() => onGo("map")} />}
-            {rows !== null && ds.length > 0 && phase === "map" && <WizMap api={api} datasets={ds} onAsk={onAsk} onBuilt={() => { onChanged(); setTick((n) => n + 1); }} onBack={() => onGo("link")} onNext={() => onGo("ready")} nextLabel="Next: move to reporting" />}
-            {rows !== null && ds.length > 0 && phase === "ready" && <WizReady api={api} datasets={ds} clientLabel={clientLabel} onAsk={onAsk} onReports={onReports} onBack={() => onGo("map")} onPublish={publishAll} />}
+            {rows !== null && everyDs.length > 0 && phase === "choose" && <WizChoose rows={everyDs} chosen={chosen} clientLabel={clientLabel} onToggle={toggle} onAll={(on) => onSel(on ? everyDs.map((d) => d.ds) : [])} onNext={() => onGo("link")} />}
+            {rows !== null && everyDs.length > 0 && phase === "link" && <WizLink api={api} role={role} datasets={chosen} onBack={() => onGo("choose")} backLabel="Back to the tables" onNext={() => onGo("review")} />}
+            {rows !== null && everyDs.length > 0 && phase === "review" && <WizReview api={api} role={role} onBack={() => onGo("link")} onNext={() => onGo("map")} />}
+            {rows !== null && everyDs.length > 0 && phase === "map" && <WizMap api={api} datasets={ds} onAsk={onAsk} onBuilt={() => { onChanged(); setTick((n) => n + 1); }} onBack={() => onGo("review")} onNext={() => onGo("ready")} nextLabel="Next: move to reporting" />}
+            {rows !== null && everyDs.length > 0 && phase === "ready" && <WizReady api={api} datasets={ds} clientLabel={clientLabel} onAsk={onAsk} onReports={onReports} onBack={() => onGo("map")} onPublish={publishAll} />}
           </div>
         );
       }
@@ -4924,12 +4971,13 @@
           (i.order || []).forEach((ds) => { if (!wizDs.some((x) => x.ds === ds)) wizDs.push({ ds, state: "done", view: "", jobId: null }); });
         });
         // v62: after Connections the flow continues in Datasets > Links & drill-down
-        const [dsPhase, setDsPhase] = useState("link");
+        const [dsPhase, setDsPhase] = useState("choose");
+        const [dsSel, setDsSel] = useState(null);        // null = every table ticked
         const [dsReached, setDsReached] = useState(0);
         const goDs = (p) => { setDsPhase(p); setDsReached((r) => Math.max(r, DS_ORDER.indexOf(p))); };
         const [dsClient, setDsClient] = useState(null);      // the client the Connections screen was working on, when it is not the one picked in the sidebar
-        useEffect(() => { setDsPhase("link"); setDsReached(0); setDsClient(null); }, [acting]);
-        const openDatasets = () => { setDsPhase("link"); setDsReached(0); setDsClient(wizClient && wizClient !== acting ? wizClient : null); goTab("links"); };
+        useEffect(() => { setDsPhase("choose"); setDsReached(0); setDsClient(null); setDsSel(null); }, [acting]);
+        const openDatasets = () => { setDsPhase("choose"); setDsReached(0); setDsSel(null); setDsClient(wizClient && wizClient !== acting ? wizClient : null); goTab("links"); };
         const wizLive = wizItems.some(liveItem);
         const wizWaiting = wizDs.some((d) => d.state === "approval");
         const wizReady = wizDs.length > 0 && !wizLive && !wizWaiting;
@@ -5190,7 +5238,7 @@
             {tab === "silver" && <SilverTab api={api} onAsk={onAsk} tick={viewsTick} />}
             {tab === "gold" && <GoldViews api={api} onAsk={onAsk} tick={viewsTick} />}
             {tab === "links" && (["engineer", "admin", "system_admin"].includes(session.identity ? session.identity.role : "")
-              ? <DatasetsWizard key={dsClient || acting} api={dsClient ? apiFor(dsClient) : api} role={session.identity ? session.identity.role : ""} clientLabel={(clientNames || {})[dsClient || acting] || dsClient || acting || ""} phase={dsPhase} reached={dsReached} onGo={goDs} onAsk={onAsk}
+              ? <DatasetsWizard key={dsClient || acting} api={dsClient ? apiFor(dsClient) : api} role={session.identity ? session.identity.role : ""} clientLabel={(clientNames || {})[dsClient || acting] || dsClient || acting || ""} phase={dsPhase} reached={dsReached} onGo={goDs} sel={dsSel} onSel={setDsSel} onAsk={onAsk}
                   onChanged={() => { viewsChanged(); setViewsTick((n) => n + 1); }} onReports={() => onMode && onMode("dashboard")} onConnections={() => onMode && onMode("connections")} />
               : <LinksPanel key={acting} api={api} role={session.identity ? session.identity.role : ""} />)}
             {tab === "describe" && <VibeData key={acting} api={api} />}
@@ -5961,7 +6009,7 @@
                   <div className="text-xs font-mono space-y-1">
                     <div data-testid="who-role" className="text-white">{ROLE_LABELS[identity.role] || identity.role}</div>
                     <div className="side-muted truncate" title={identity.email}>{identity.email}</div>
-                    <div data-testid="who-version" className="side-muted opacity-80">Server {identity.version || "older than v35 - redeploy the backend"} · Screen v62</div>
+                    <div data-testid="who-version" className="side-muted opacity-80">Server {identity.version || "older than v35 - redeploy the backend"} · Screen v63</div>
                     <div className="flex gap-3 mt-2">
                       {identity.can_change_password !== false && <button data-testid="change-password-open" onClick={() => setShowPw(true)} className="side-muted hover-w underline">Change password</button>}
                       <button onClick={onSignOut} className="side-muted hover-w underline">Sign out</button>
